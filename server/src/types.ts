@@ -24,7 +24,7 @@ export type GhostLettersPhase =
   | "ROUND_SEND"
   | "ROUND_GHOST_PICK"
   | "ROUND_DISCUSS"
-  | "FINAL_VOTE" // legacy marker, used as a bridge before startFinalVoting()
+  | "FINAL_VOTE"
   | "FINAL_VOTE_MOTIVE"
   | "FINAL_VOTE_PLACE"
   | "FINAL_VOTE_METHOD"
@@ -78,52 +78,61 @@ export type FinalState = {
 
 export type GhostLettersState = {
   phase: GhostLettersPhase;
-  // Arrested Player ID
+  round: number;
+
+  roles: Record<string, Role>;
+
+  setup: {
+    deck: Card[];
+    board: Record<Category, Card[]>;
+    currentTurnPlayerId: string;
+    turnOrder: string[];
+    draftCardByPlayerId: Record<string, Card | null>;
+  };
+
+  table: { motive: Card[]; place: Card[]; method: Card[] };
+
+  caseFile: { motiveId: string; placeId: string; methodId: string } | null;
+
+  hands: Record<string, Card[]>;
+  mailbox: Record<string, Card>;        // playerId -> sent card
+
+  roundHints: Card[];
+  revealedHints: Card[];
+
+  discard: Card[];
+  vanished: Card[];
+
+  discardedThisRound: Record<string, boolean>; // playerId -> usedDiscardThisRound
+
   public?: {
     eligibleArrestPlayerIds?: string[];
   };
 
-  // role map: playerId -> role
-  roles: Record<string, Role>;
-
-  // setup (draft field building)
-  setup: GhostLettersSetupState;
-
-  // public board categories used in main game
-  table: {
-    motive: Card[];
-    place: Card[];
-    method: Card[];
+  final?: {
+    votes: {
+      MOTIVE: Record<string, string>;
+      PLACE: Record<string, string>;
+      METHOD: Record<string, string>;
+      KILLER: Record<string, string>;
+    };
+    selected: {
+      motiveId: string | null;
+      placeId: string | null;
+      methodId: string | null;
+      killerPlayerId: string | null;
+    };
+    arrestedIds: string[];
+    killerArrestAttempts: number;
+    detectivesWin: boolean | null;
+    killerWinByGuess: boolean | null;
+    killerGuess: null | { targetPlayerId: string; roleGuess: "WITNESS" | "EXPERT"; success: boolean };
+    result?: any;
   };
 
-  // legacy (kept for compatibility, not used by current rules)
-  trueClues: CaseFile;
-
-  // killer-selected true clues (secret; only killer+accomplice+ghost see via me:secret)
-  caseFile: CaseFile | null;
-
-  // rounds
-  round: number;
-
-  // private hands: playerId -> cards (NOT for public snapshot)
-  hands: Record<string, Card[]>;
-
-  // per-round submissions: playerId -> card (NOT for public snapshot)
-  mailbox: Record<string, Card>;
-
-  // hints selected in current round (optional for UI)
-  roundHints: Card[];
-
-  // hints accumulated across all rounds (public)
-  revealedHints: Card[];
-  discard: [],
-  vanished: [],
-  discardedThisRound: {},
-  // final voting/arrest logic
-  final: FinalState | null;
-
-  // legacy result fields (optional)
-  finalPick?: CaseFile;
+  // если где-то использовалось ранее
+  trueClues?: { motiveId: string; placeId: string; methodId: string };
+  finalPick?: any;
   result?: any;
 };
 
@@ -146,6 +155,8 @@ export type Room = {
   code: RoomCode;
   players: Player[];
   game: RoomGame | null;
+
+  createdAt: number;
 
   // housekeeping
   emptySince: number | null;

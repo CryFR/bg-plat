@@ -168,9 +168,6 @@ export function initGhostLetters(playerIds: string[]): GhostLettersState {
     discard: [],
     vanished: [],
     discardedThisRound: {},
-
-    // финальный блок создадим по месту
-    final: null,
   };
 
   dealNextDraftCard(gs, currentTurnPlayerId);

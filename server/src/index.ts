@@ -123,10 +123,10 @@ function snapshot(code: string): ClientRoomSnapshot {
 
     final: gs.final
       ? {
-          selected: gs.final.selected,
-          arrestedIds: gs.final.arrestedIds,
-          result: gs.final.result ?? null,
-        }
+        selected: gs.final.selected,
+        arrestedIds: gs.final.arrestedIds,
+        result: gs.final.result ?? null,
+      }
       : null,
 
     result: (gs as any).result ?? null,
@@ -503,7 +503,10 @@ io.on("connection", (socket) => {
     if (!isHostId(room, byPlayerId)) return;
 
     const gs = room.game.state;
-    if (gs.phase !== "ROUND_DISCUSS") return;
+    const phaseBefore = gs.phase;
+
+    // хост может жать "следующий шаг" только из обсуждения
+    if (phaseBefore  !== "ROUND_DISCUSS") return;
 
     next(gs);
 
@@ -523,13 +526,14 @@ io.on("connection", (socket) => {
     io.to(code).emit("room:update", snapshot(code));
   });
 
+
   /**
    * Voting in final stages
    */
   socket.on(
     "game:ghostletters:vote",
     ({ code, playerId, kind, choiceId }: { code: string; playerId: string; kind: "MOTIVE" | "PLACE" | "METHOD" | "KILLER"; choiceId: string },
-    cb: (res: any) => void) => {
+      cb: (res: any) => void) => {
       const room = getRoom(code);
       if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
 

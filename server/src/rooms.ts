@@ -1,5 +1,5 @@
 // server/src/rooms.ts
-import type { Room, Player } from "./types";
+import type { Room, Player } from "./types.js";
 
 const rooms = new Map<string, Room>();
 

@@ -13,9 +13,9 @@ import {
   socketIndex,
   ensureHost,
   removePlayer,
-} from "./rooms";
+} from "./rooms.js";
 
-import type { ClientRoomSnapshot, Room, Player, GhostLettersState, Role } from "./types";
+import type { ClientRoomSnapshot, Room, Player, GhostLettersState, Role } from "./types.js";
 
 import {
   initGhostLetters,
@@ -31,7 +31,7 @@ import {
   resolveVoteIfComplete,
   killerGuessSpecial,
   discardOne,
-} from "./games/ghostLetters";
+} from "./games/ghostLetters.js";
 
 const PORT = 3001;
 

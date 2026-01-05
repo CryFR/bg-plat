@@ -1,4 +1,4 @@
-import type { Card, Category, GhostLettersState, Role } from "../types";
+import type { Card, Category, GhostLettersState, Role } from "../types.js";
 
 function shuffle<T>(arr: T[]) {
   const a = [...arr];

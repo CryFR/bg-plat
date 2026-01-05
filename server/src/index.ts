@@ -35,6 +35,7 @@ import {
 
 const PORT = 3001;
 
+const lastCreateBySocket = new Map<string, number>();
 // room TTL when nobody connected (ms)
 const EMPTY_ROOM_TTL = 10 * 60 * 1000; // 10 min
 // mark connected=false if no pings/traffic for too long (ms)
@@ -243,6 +244,23 @@ io.on("connection", (socket) => {
   socket.on(
     "room:create",
     ({ name, playerId }: { name: string; playerId: string }, cb: (res: any) => void) => {
+
+      console.log("[room:create]", {
+        socketId: socket.id,
+        ip: socket.handshake.address,
+        ua: socket.handshake.headers["user-agent"],
+        t: Date.now(),
+        playerId,
+        name,
+      });
+
+      // 🔒 rate-limit (ОЧЕНЬ важно)
+      const prev = lastCreateBySocket.get(socket.id) ?? 0;
+      if (Date.now() - prev < 1500) {
+        return cb?.({ ok: false, error: "CREATE_RATE_LIMIT" });
+      }
+      lastCreateBySocket.set(socket.id, Date.now());
+
       const room = createRoom();
 
       const host: Player = {
@@ -265,6 +283,7 @@ io.on("connection", (socket) => {
       io.to(room.code).emit("room:update", snapshot(room.code));
     }
   );
+
 
   socket.on(
     "room:ready",
@@ -506,7 +525,7 @@ io.on("connection", (socket) => {
     const phaseBefore = gs.phase;
 
     // хост может жать "следующий шаг" только из обсуждения
-    if (phaseBefore  !== "ROUND_DISCUSS") return;
+    if (phaseBefore !== "ROUND_DISCUSS") return;
 
     next(gs);
 

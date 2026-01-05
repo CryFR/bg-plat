@@ -13,6 +13,7 @@ export default function BgPage() {
   const [busy, setBusy] = useState(false);
 
   function createRoom() {
+    console.log("[UI] createRoom()", { t: Date.now(), name });
     const clean = name.trim();
     if (!clean) return;
 

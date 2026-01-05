@@ -1,5 +1,5 @@
-// server/src/rooms.ts
-import type { Room, Player } from "./types.js";
+// server/src/platform/roomStore.ts
+import type { Room } from "./types.js";
 
 const rooms = new Map<string, Room>();
 
@@ -17,17 +17,18 @@ export function getRoom(code: string) {
   return rooms.get(code);
 }
 
-export function createRoom(): Room {
+export function createRoom(now: () => number): Room {
   let code = makeCode();
   while (rooms.has(code)) code = makeCode();
 
+  const t = now();
   const room: Room = {
     code,
-    createdAt: Date.now(),
+    createdAt: t,
     players: [],
     game: null,
     emptySince: null,
-    lastActiveAt: Date.now(),
+    lastActiveAt: t,
   };
 
   rooms.set(code, room);
@@ -52,12 +53,10 @@ export function findRoomBySocketId(socketId: string): { room: Room; playerId: st
   return { room, playerId: entry.playerId };
 }
 
-export function ensureHost(room: Room) {
-  if (room.players.some((p) => p.isHost)) return;
-  if (room.players[0]) room.players[0].isHost = true;
+export function bindSocketToRoom(socketId: string, code: string, playerId: string) {
+  socketIndex.set(socketId, { code, playerId });
 }
 
-export function removePlayer(room: Room, playerId: string) {
-  room.players = room.players.filter((p) => p.playerId !== playerId);
-  ensureHost(room);
+export function unbindSocket(socketId: string) {
+  socketIndex.delete(socketId);
 }

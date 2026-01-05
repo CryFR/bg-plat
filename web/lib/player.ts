@@ -1,20 +1,35 @@
+const KEY = "bg_player_id";
+const NAME_KEY = "bg_player_name";
+
+function randomIdFallback() {
+  // достаточно для playerId (не крипто-идеально, но ок)
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function getPlayerId() {
-  if (typeof window === "undefined") return "";
-  const key = "bg_player_id";
-  let id = localStorage.getItem(key);
+  if (typeof window === "undefined") return "server";
+
+  let id = localStorage.getItem(KEY);
   if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(key, id);
+    const c: any = (globalThis as any).crypto;
+
+    if (c && typeof c.randomUUID === "function") {
+      id = c.randomUUID();
+    } else {
+      id = randomIdFallback();
+    }
+
+    localStorage.setItem(KEY, id);
   }
   return id;
 }
 
-export function getSavedName(defaultName = "Nik") {
-  if (typeof window === "undefined") return defaultName;
-  return localStorage.getItem("bg_player_name") || defaultName;
+export function getSavedName(fallback = "Player") {
+  if (typeof window === "undefined") return fallback;
+  return localStorage.getItem(NAME_KEY) || fallback;
 }
 
 export function saveName(name: string) {
   if (typeof window === "undefined") return;
-  localStorage.setItem("bg_player_name", name);
+  localStorage.setItem(NAME_KEY, name);
 }

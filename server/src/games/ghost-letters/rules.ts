@@ -9,9 +9,18 @@ function shuffle<T>(arr: T[]) {
   return a;
 }
 
+// Rounds per official table (final voting does NOT count as a round).
+export function roundsForPlayers(n: number) {
+  // n >= 4 in our platform
+  if (n <= 4) return 6; // 4 -> 5
+  if (n <= 7) return 5; // 5-7 -> 4
+  if (n <= 10) return 4; // 8-10 -> 3
+  return 3; // 11-12 -> 2
+}
+
 // --- One finite deck for EVERYTHING (setup + hands) ---
-// 50 unique cards for testing, no repeats in one game.
-const MASTER_DECK_50 = [
+// Unique cards for testing, no repeats in one game.
+const MASTER_DECK = [
   "3d-hammer",
   "ample-dress",
   "armchair",
@@ -23,43 +32,207 @@ const MASTER_DECK_50 = [
   "charging",
   "clapperboard",
   "cooking-pot",
+  "dog-bowl",
+  "dolphin",
+  "dream-catcher",
   "drill",
+  "dutch-bike",
   "dynamite",
   "easel",
   "eight-ball",
+  "emerald-necklace",
+  "empty-chessboard",
+  "empty-metal-bucket-handle",
+  "escalator",
+  "eyelashes",
+  "falling-bomb",
+  "farm-tractor",
+  "feline",
   "female-legs",
+  "figurehead",
   "film-projector",
+  "fire-extinguisher",
+  "fire-gem",
   "first-aid-kit",
+  "fishing-pole",
+  "flashlight",
+  "flexible-lamp",
   "flip-flops",
+  "foot-plaster",
+  "fork-knife-spoon",
+  "forklift",
+  "french-fries",
+  "frog-prince",
+  "frozen-body",
+  "full-motorcycle-helmet",
+  "full-pizza",
+  "funnel",
+  "fur-boot",
+  "furnace",
   "fur-shirt",
+  "game-console",
   "gardening-shears",
+  "g-clef",
+  "glass-celebration",
+  "globe-ring",
   "gloves",
+  "gold-mine",
   "gps",
+  "grass",
   "grass-mushroom",
+  "greek-sphinx",
+  "guitar-bass-head",
+  "half-log",
+  "hammer-sickle",
+  "hand-bag",
+  "hand-bandage",
+  "handcuffed",
+  "hand-grip",
+  "handheld-fan",
+  "hand-saw",
   "hanger",
   "hatchet",
   "hemp",
+  "highlighter",
+  "hill-fort",
   "histogram",
+  "hockey",
+  "hole-ladder",
+  "honey-jar",
+  "hoodie",
   "hook",
+  "horseshoe",
+  "i-beam",
+  "ice-pop",
+  "id-card",
+  "igloo",
+  "imperial-crown",
   "injustice",
   "joystick",
+  "jug",
+  "katana",
   "kebab-spit",
   "keyboard",
   "key-lock",
+  "kick-scooter",
   "laptop",
+  "large-paint-brush",
+  "lasso",
+  "leak",
+  "level-crossing",
+  "life-bar",
+  "lighter",
+  "lighthouse",
+  "lily-pads",
+  "lipstick",
+  "lockers",
+  "lockpicks",
+  "log",
+  "love-letter",
+  "magic-potion",
   "mailbox",
+  "marshmallows",
   "matryoshka-dolls",
   "medicine-pills",
+  "melting-ice-cube",
+  "metal-detector",
+  "microphone",
+  "mona-lisa",
   "moncler-jacket",
   "money-stack",
+  "moon-bats",
+  "mouse",
+  "muscular-torso",
+  "newspaper",
   "notebook",
+  "nuclear-waste",
   "office-chair",
   "oil-can",
+  "old-lantern",
+  "old-microphone",
+  "open-folder",
+  "paper-plane",
   "papyrus",
+  "passport",
+  "periscope",
+  "person-in-bed",
+  "perspective-dice-six-faces-six",
+  "pharoah",
+  "phone",
+  "photo-camera",
+  "piggy-bank",
+  "pillow",
+  "pimiento",
+  "pin",
+  "pinata",
+  "ping-pong-bat",
+  "plug",
+  "police-car",
+  "popcorn",
+  "post-stamp",
   "prank-glasses",
+  "present",
+  "punching-bag",
+  "puzzle",
+  "rail-road",
+  "razor",
+  "remedy",
+  "ringing-alarm",
+  "rolled-cloth",
+  "roller-skate",
+  "rope-coil",
+  "rope-dart",
+  "rupee",
+  "sarcophagus",
+  "satellite-communication",
+  "screw",
+  "scuba-mask",
+  "scuba-tanks",
+  "secret-book",
+  "sheep",
+  "shotgun-rounds",
+  "shower",
+  "skateboard",
+  "skier",
   "sliced-sausage",
   "slot-machine",
+  "smartphone",
+  "smoking-pipe",
+  "smoking-volcano",
+  "socks",
+  "space-shuttle",
+  "sport-medal",
+  "stop-sign",
+  "strongbox",
+  "stun-grenade",
+  "swiss-army-knife",
+  "tap",
+  "throne-king",
+  "ticket",
+  "time-synchronization",
+  "tire-tracks",
+  "traffic-cone",
+  "trash-can",
+  "t-rex-skull",
+  "trophies-shelf",
+  "unicycle",
+  "ushanka",
+  "uzi",
+  "vending-machine",
+  "vr-headset",
+  "walkie-talkie",
+  "washing-machine",
+  "water-diviner-stick",
+  "waterfall",
+  "weight-scale",
+  "whisk",
+  "windpump",
+  "wind-turbine",
+  "wine-bottle",
+  "winter-gloves",
+  "wool",
 ];
+
 
 
 
@@ -130,7 +303,7 @@ export function initGhostLetters(playerIds: string[]): GhostLettersState {
   const roles: Record<string, Role> = {};
   for (let i = 0; i < shuffledPlayers.length; i++) roles[shuffledPlayers[i]] = plan[i];
 
-  const deck: Card[] = shuffle(MASTER_DECK_50).map((assetId, i) => ({
+  const deck: Card[] = shuffle(MASTER_DECK).map((assetId, i) => ({
     id: newCardId("D", assetId, i),
     label: assetId.replace(/-/g, " "), // временно, чтобы текст был читабельный
     assetId, // 🔑 КЛЮЧЕВОЕ
@@ -160,6 +333,7 @@ export function initGhostLetters(playerIds: string[]): GhostLettersState {
     caseFile: null,
 
     round: 1,
+    maxRounds: roundsForPlayers(playerIds.length),
     hands: {},
     mailbox: {},
     roundHints: [],
@@ -168,6 +342,11 @@ export function initGhostLetters(playerIds: string[]): GhostLettersState {
     discard: [],
     vanished: [],
     discardedThisRound: {},
+
+    // public reactions (emoji) per evidence card
+    reactions: {},
+
+    voteHistory: [],
   };
 
   dealNextDraftCard(gs, currentTurnPlayerId);
@@ -366,7 +545,8 @@ export function ghostPick(
 
 export function next(gs: GhostLettersState) {
   // после обсуждения либо новый раунд, либо финал
-  if (gs.round >= 4) {
+  const max = gs.maxRounds ?? 4;
+  if (gs.round >= max) {
     gs.phase = "FINAL_VOTE"; // legacy marker, сервер вызовет startFinalVoting(gs)
     return;
   }
@@ -396,6 +576,9 @@ export function startFinalVoting(gs: GhostLettersState) {
   gs.final!.detectivesWin = null;
   gs.final!.killerWinByGuess = null;
   gs.final!.killerGuess = null;
+
+  // reset audit history for this final sequence
+  gs.voteHistory = [];
 }
 
 export function castVote(
@@ -530,7 +713,10 @@ export function resolveVoteIfComplete(gs: GhostLettersState, allPlayerIds: strin
 
     const killerArrested = arrestedRole === "KILLER";
 
-    const detectivesWin = correctClues === 3 || (correctClues >= 2 && killerArrested);
+    // "Case revealed" = all three clues are correct.
+    const caseRevealed = correctClues === 3;
+
+    const detectivesWin = caseRevealed || (correctClues >= 2 && killerArrested);
 
     // если детективы НЕ выигрывают — сразу результат
     if (!detectivesWin) {
@@ -544,21 +730,9 @@ export function resolveVoteIfComplete(gs: GhostLettersState, allPlayerIds: strin
       return;
     }
 
-    // детективы “выиграли”, но если есть Witness/Expert — киллер может попытаться угадать
-    if (hasRole(gs, "WITNESS") || hasRole(gs, "EXPERT")) {
-      // если киллер уже арестован — ему нельзя угадывать, значит детективы побеждают
-      if (killerArrested) {
-        finishResult(gs, {
-          detectivesWin: true,
-          reason: "DETECTIVES_WIN",
-          correctClues,
-          killerArrested,
-          arrestedPlayerId: arrested,
-        });
-        return;
-      }
-
-      // иначе даём фазу угадывания
+    // If the case is revealed AND there is Witness or Expert in the game,
+    // the killer always gets ONE last guess (even if the killer was arrested).
+    if (caseRevealed && (hasRole(gs, "WITNESS") || hasRole(gs, "EXPERT"))) {
       gs.final!.detectivesWin = true;
       gs.final!.killerWinByGuess = null;
       gs.phase = "KILLER_GUESS_SPECIAL";
@@ -628,8 +802,8 @@ export function killerGuessSpecial(
   // только киллер
   if (gs.roles[killerId] !== "KILLER") return { ok: false, error: "ONLY_KILLER" as const };
 
-  // если киллер арестован — нельзя
-  if (gs.final!.arrestedIds.includes(killerId)) return { ok: false, error: "KILLER_ARRESTED" as const };
+  // only one attempt
+  if (gs.final!.killerGuess) return { ok: false, error: "ALREADY_GUESSED" as const };
 
   // нельзя угадывать призрака (и себя)
   if (!gs.roles[targetPlayerId]) return { ok: false, error: "INVALID_PLAYER" as const };

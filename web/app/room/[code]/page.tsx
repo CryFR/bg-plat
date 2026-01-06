@@ -2,215 +2,244 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getSocket } from "../../../lib/socket";
 import { getPlayerId, getSavedName, saveName } from "../../../lib/player";
-
-type Player = {
-  playerId: string;
-  socketId: string;
-  name: string;
-  isHost: boolean;
-  ready: boolean;
-  connected: boolean;
-};
-
-type Snapshot = {
-  code: string;
-  players: Player[];
-  game: null | { id: "ghost-letters"; state: any };
-};
+import { useRoom } from "../../../lib/platform/useRoom";
+import type { Player } from "../../../lib/platform/types";
 
 export default function RoomPage() {
-  const { code } = useParams<{ code: string }>();
   const router = useRouter();
-  const socket = useMemo(() => getSocket(), []);
+  const { code } = useParams() as any;
 
-  const [name, setName] = useState(getSavedName("Nik"));
-  const [joined, setJoined] = useState(false);
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [meReady, setMeReady] = useState(false);
+  const { socket, snap, kicked } = useRoom(String(code));
 
-  const roomLink = typeof window !== "undefined" ? window.location.href : "";
+  const [name, setName] = useState(getSavedName("Player"));
 
   useEffect(() => {
-    const onUpdate = (s: Snapshot) => setSnap(s);
+    // Keep local storage sane even if user pastes a long string.
+    const fixed = (name ?? "").trim().slice(0, 12) || "Player";
+    saveName(fixed);
+  }, [name]);
 
-    const onKicked = () => {
-      alert("Тебя кикнули из комнаты");
-      window.location.href = "/bg";
-    };
-
-    socket.on("room:update", onUpdate);
-    socket.on("room:kicked", onKicked);
-
-    return () => {
-      socket.off("room:update", onUpdate);
-      socket.off("room:kicked", onKicked);
-    };
-  }, [socket]);
-
+  // If room has game id -> render game room UI right here (single URL),
+  // OR if you prefer separate URL per game (more stable deep-link):
   useEffect(() => {
-    if (snap?.game?.id === "ghost-letters") {
-      router.push(`/room/${code}/game/ghost-letters`);
-    }
+    const gid = (snap as any)?.game?.id as string | undefined;
+    const st = (snap as any)?.game?.status as string | undefined;
+    if (gid && st === "running") router.replace(`/room/${code}/game/${gid}`);
   }, [snap, router, code]);
 
-  useEffect(() => {
-  const myPid = getPlayerId();
-  const p = snap?.players?.find((x) => x.playerId === myPid);
-  if (p) setMeReady(!!p.ready);
-}, [snap]);
-
-  function join() {
-    const clean = name.trim();
-    if (!clean) return;
-
-    saveName(clean);
-    socket.emit("room:join", { code, name: clean, playerId: getPlayerId() }, (res: any) => {
-      if (res?.error) {
-        alert("Комната не найдена");
-        return;
-      }
-      setJoined(true);
-      setSnap(res.snapshot);
-    });
+  if (kicked) {
+    return (
+      <div style={{ padding: 24 }}>
+        <h2 style={{ marginTop: 0 }}>Тебя кикнули</h2>
+        <div style={{ opacity: 0.8 }}>{kicked}</div>
+      </div>
+    );
   }
 
-  function toggleReady() {
-    const next = !meReady;
-    setMeReady(next);
-
-    socket.emit("room:ready", { code, playerId: getPlayerId(), ready: next }, (res: any) => {
-      if (!res?.ok) {
-        // откатим локальный стейт, если сервер не принял
-        setMeReady(!next);
-        alert(res?.error ?? "Не удалось поменять готовность");
-      }
-    });
+  if (!snap) {
+    return <div style={{ padding: 24, opacity: 0.8 }}>Захожу в комнату…</div>;
   }
 
-  function start() {
-    socket.emit("game:ghostletters:start", { code, byPlayerId: getPlayerId() }, (res: any) => {
-      if (!res?.ok) {
-        if (res?.error === "NEED_4P_FOR_COMPETITIVE") alert("Нужно минимум 4 игрока для соревновательного режима");
-        else alert(res?.error ?? "Не удалось стартовать");
-      }
-    });
+  const players = (snap.players || []) as Player[];
+  const playerId = getPlayerId();
+  const me = players.find((p) => p.playerId === playerId);
+  const gameId = (snap as any)?.game?.id as string | undefined;
+  const gameStatus = (snap as any)?.game?.status as string | undefined;
+
+  const isReady = !!me?.ready;
+  const canRename = !isReady;
+  const currentServerName = me?.name ?? "";
+
+  function commitName() {
+    const next = (name ?? "").trim().slice(0, 12) || "Player";
+    setName(next);
+    saveName(next);
+    socket.emit("room:rename", { code: snap.code, playerId, name: next });
   }
 
-  function kick(targetPlayerId: string) {
-    socket.emit("room:kick", { code, byPlayerId: getPlayerId(), targetPlayerId }, (res: any) => {
-      if (!res?.ok) alert(res?.error ?? "Не удалось кикнуть");
-    });
+  function setReady(ready: boolean) {
+    socket.emit("room:ready", { code: snap.code, playerId, ready });
   }
-
-  const myPid = getPlayerId();
-  const me = snap?.players?.find((p) => p.playerId === myPid);
-  const isHost = !!me?.isHost;
-  const allReady = (snap?.players?.length ?? 0) > 0 && (snap?.players ?? []).every((p) => p.ready);
 
   return (
-    <div style={{ padding: 24, maxWidth: 980, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>Комната {code}</h1>
-        <button
-          onClick={() => navigator.clipboard.writeText(roomLink)}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 12,
-            border: "1px solid #444",
-            background: "#111",
-            color: "#eee",
-          }}
-        >
-          Скопировать ссылку
-        </button>
-      </div>
+        <div>
+          <h1 style={{ margin: 0 }}>Комната: {snap.code}</h1>
+          <div style={{ opacity: 0.75, marginTop: 6 }}>
+            Игроков: {players.length} • Игра: {(snap as any)?.game?.id || "—"}
+          </div>
+        </div>
 
-      {!joined && (
-        <div style={{ marginTop: 18, display: "flex", gap: 10, alignItems: "center" }}>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Никнейм"
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #333", background: "#121220", color: "#eee" }}
-          />
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  value={name}
+                  maxLength={12}
+                  onChange={(e) => setName(e.target.value.slice(0, 12))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && canRename) commitName();
+                  }}
+                  placeholder="Ник"
+                  disabled={!canRename}
+                  style={{
+                    padding: 10,
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: canRename ? "#121220" : "#0f0f18",
+                    color: "#eee",
+                    opacity: canRename ? 1 : 0.65,
+                    cursor: canRename ? "text" : "not-allowed",
+                    minWidth: 220,
+                  }}
+                  title={!canRename ? "Ник нельзя менять после Ready" : ""}
+                />
+                <button
+                  disabled={!canRename || (name.trim() || "Player") === (currentServerName || "Player")}
+                  onClick={commitName}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: "1px solid #333",
+                    background: canRename ? "#2b2b3a" : "#1a1a24",
+                    color: "#fff",
+                    cursor: canRename ? "pointer" : "not-allowed",
+                    opacity: canRename ? 1 : 0.6,
+                    whiteSpace: "nowrap",
+                  }}
+                  title={!canRename ? "Сними Ready, чтобы сменить ник" : "Сохранить ник"}
+                >
+                  Сменить ник
+                </button>
+              </div>
+            </div>
+          </div>
+
           <button
-            onClick={join}
-            disabled={!name.trim()}
-            style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #444", background: "#1d4ed8", color: "#fff" }}
+            onClick={() => setReady(!(me?.ready))}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: me?.ready ? "#1d5d3a" : "#2b2b3a",
+              color: "#fff",
+              cursor: "pointer",
+            }}
           >
-            Войти
+            {me?.ready ? "Готов ✅" : "Готов?"}
           </button>
         </div>
-      )}
-
-      <div style={{ marginTop: 18, border: "1px solid #2a2a3a", background: "#10101a", padding: 16, borderRadius: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Игроки</h2>
-
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {(snap?.players ?? []).map((p) => (
-            <li key={p.playerId} style={{ marginBottom: 8, opacity: p.connected ? 1 : 0.55 }}>
-              {p.name} {p.isHost ? "(host)" : ""} — {p.ready ? "готов" : "не готов"} {p.connected ? "" : " (offline)"}
-              {isHost && !p.isHost && (
-                <button
-                  onClick={() => kick(p.playerId)}
-                  style={{
-                    marginLeft: 10,
-                    padding: "2px 8px",
-                    borderRadius: 10,
-                    border: "1px solid #444",
-                    background: "#2a0f14",
-                    color: "#fff",
-                    cursor: "pointer",
-                  }}
-                >
-                  Kick
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-
-        {joined && (
-          <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
-            <button
-              onClick={toggleReady}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 12,
-                border: "1px solid #444",
-                background: meReady ? "#166534" : "#111",
-                color: "#eee",
-              }}
-            >
-              {meReady ? "Я не готов" : "Я готов"}
-            </button>
-
-            {isHost && (
-              <button
-                onClick={start}
-                disabled={!allReady}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #444",
-                  background: allReady ? "#1d4ed8" : "#222",
-                  color: "#fff",
-                  cursor: allReady ? "pointer" : "not-allowed",
-                }}
-              >
-                Старт: Письма призрака
-              </button>
-            )}
-
-            {!isHost && <span style={{ opacity: 0.7, fontSize: 13 }}>Стартует хост</span>}
-          </div>
-        )}
       </div>
 
-      <div style={{ marginTop: 14, opacity: 0.65, fontSize: 13 }}>
-        Комнаты не отображаются публично — только по ссылке. Реконнект работает (роль/рука сохраняются).
+      <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
+        <div style={{ border: "1px solid #2a2a3a", background: "#10101a", padding: 16, borderRadius: 16 }}>
+          <h3 style={{ marginTop: 0 }}>Игроки</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {players.map((p) => (
+              <div
+                key={p.playerId}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  background: "#0d0d16",
+                  border: "1px solid #232338",
+                  opacity: p.connected ? 1 : 0.55,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700 }}>
+                    {p.name} {p.isHost ? "👑" : ""}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>
+                    {p.playerId.slice(0, 10)}… • {p.connected ? "online" : "offline"}
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, opacity: 0.85 }}>{p.ready ? "✅" : "…"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ border: "1px solid #2a2a3a", background: "#10101a", padding: 16, borderRadius: 16 }}>
+          <h3 style={{ marginTop: 0 }}>Лобби</h3>
+          <div style={{ opacity: 0.75, marginBottom: 12 }}>
+            Эта страница — общий “комнатный” контейнер. Конкретная игра рендерится по <code>gameId</code>.
+          </div>
+          {!gameId ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ padding: 12, borderRadius: 12, border: "1px dashed #333", opacity: 0.85 }}>
+                Игра пока не выбрана.
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  disabled={!me?.isHost}
+                  onClick={() => {
+                    socket.emit("room:setGame", { code: snap.code, byPlayerId: playerId, gameId: "ghost-letters" });
+                  }}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #444",
+                    background: me?.isHost ? "#1d4ed8" : "#2b2b3a",
+                    color: "#fff",
+                    cursor: me?.isHost ? "pointer" : "not-allowed",
+                    opacity: me?.isHost ? 1 : 0.6,
+                  }}
+                >
+                  Выбрать Ghost Letters
+                </button>
+
+                {!me?.isHost ? (
+                  <span style={{ opacity: 0.7, fontSize: 13 }}>Только хост может выбрать игру</span>
+                ) : null}
+              </div>
+            </div>
+          ) : gameStatus !== "running" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ padding: 12, borderRadius: 12, border: "1px solid #333", opacity: 0.9 }}>
+                Выбрана игра: <b>{gameId}</b>
+                <div style={{ opacity: 0.75, marginTop: 6 }}>Для старта нужно 4+ игроков. Сейчас: {players.length}.</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  disabled={!me?.isHost || players.length < 4}
+                  onClick={() => {
+                    socket.emit("room:startGame", { code: snap.code, byPlayerId: playerId });
+                  }}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #444",
+                    background: me?.isHost && players.length >= 4 ? "#16a34a" : "#2b2b3a",
+                    color: "#fff",
+                    cursor: me?.isHost && players.length >= 4 ? "pointer" : "not-allowed",
+                    opacity: me?.isHost && players.length >= 4 ? 1 : 0.6,
+                  }}
+                >
+                  Старт
+                </button>
+
+                {!me?.isHost ? (
+                  <span style={{ opacity: 0.7, fontSize: 13 }}>Только хост может начать игру</span>
+                ) : players.length < 4 ? (
+                  <span style={{ opacity: 0.7, fontSize: 13 }}>Нужно 4+ игрока</span>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: 12, borderRadius: 12, border: "1px dashed #333", opacity: 0.8 }}>
+              Игра запущена — перенаправляем…
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -11,11 +11,12 @@ export function startCleanup(ctx: ServerContext) {
     const roomsArr = Array.from(allRooms().values());
 
     for (const room of roomsArr) {
-      for (const p of room.players) {
-        if (p.connected && t - p.lastSeen > config.PLAYER_INACTIVE_AFTER_MS) {
-          p.connected = false;
-        }
-      }
+      // IMPORTANT:
+      // Do NOT mark players as disconnected based on lastSeen.
+      // `connected` must reflect the real socket connection state and is
+      // updated by socket connect/disconnect handlers.
+      // lastSeen can still be used for UI "activity" or room GC, but should
+      // not affect participation eligibility.
 
       setEmptySinceIfNeeded(room, now);
 

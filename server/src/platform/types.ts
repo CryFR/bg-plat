@@ -11,23 +11,25 @@ export type Player = {
   ready: boolean;
   connected: boolean;
   lastSeen: number;
+  /** Joined after game started. Spectators watch only until next game start. */
+  spectator?: boolean;
 };
+
+export type RoomGameStatus = "selected" | "running";
 
 export type RoomGame = {
   id: string;
-  state: any;
+  status: RoomGameStatus;
+  state: any | null;
 };
 
 export type Room = {
   code: RoomCode;
   players: Player[];
   game: RoomGame | null;
-
   createdAt: number;
-
-  // housekeeping
-  emptySince: number | null;
   lastActiveAt: number;
+  emptySince: number | null;
 };
 
 export type ClientPlayer = {
@@ -37,14 +39,16 @@ export type ClientPlayer = {
   isHost: boolean;
   ready: boolean;
   connected: boolean;
+  spectator?: boolean;
 };
 
 export type ClientRoomSnapshot = {
-  code: string;
+  code: RoomCode;
   players: ClientPlayer[];
   game: null | {
     id: string;
-    state: any; // public (no secrets)
+    status: RoomGameStatus;
+    state?: unknown; // public state (no secrets)
   };
 };
 

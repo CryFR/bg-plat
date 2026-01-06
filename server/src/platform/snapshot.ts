@@ -4,7 +4,7 @@ import { getRoom } from "./roomStore.js";
 import { getGameAdapter } from "../games/registry.js";
 
 /**
- * Snapshot without secrets.
+ * Room snapshot without secrets.
  */
 export function buildSnapshot(code: string): ClientRoomSnapshot {
   const room = getRoom(code);
@@ -17,16 +17,24 @@ export function buildSnapshot(code: string): ClientRoomSnapshot {
     isHost: p.isHost,
     ready: p.ready,
     connected: p.connected,
+    spectator: !!p.spectator,
   }));
 
   if (!room.game) return { code, players, game: null };
 
+  // If game only selected (not started) – don't call adapter views/state.
+  if (room.game.status !== "running") {
+    return { code, players, game: { id: room.game.id, status: room.game.status } };
+  }
+
   const adapter = getGameAdapter(room.game.id);
-  const publicState = adapter ? adapter.buildPublicState(room.game.state) : room.game.state;
+  const publicState = adapter && room.game.state != null
+    ? adapter.buildPublicState(room.game.state)
+    : room.game.state;
 
   return {
     code,
     players,
-    game: { id: room.game.id, state: publicState },
+    game: { id: room.game.id, status: room.game.status, state: publicState },
   };
 }

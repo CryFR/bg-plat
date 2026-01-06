@@ -20,7 +20,7 @@ export default function BgPage() {
     saveName(clean);
     setBusy(true);
 
-    socket.emit("room:create", { name: clean, playerId: getPlayerId() }, (res: any) => {
+    socket.emit("room:create", { name: clean, playerId: getPlayerId(), gameId: "ghost-letters" }, (res: any) => {
       setBusy(false);
       if (res?.code) router.push(`/room/${res.code}`);
       else alert("Не удалось создать комнату");

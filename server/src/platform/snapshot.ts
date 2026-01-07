@@ -14,6 +14,7 @@ export function buildSnapshot(code: string): ClientRoomSnapshot {
     playerId: p.playerId,
     socketId: p.socketId,
     name: p.name,
+    color: p.color,
     isHost: p.isHost,
     ready: p.ready,
     connected: p.connected,

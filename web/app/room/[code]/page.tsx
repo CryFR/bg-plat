@@ -6,6 +6,32 @@ import { getPlayerId, getSavedName, saveName } from "../../../lib/player";
 import { useRoom } from "../../../lib/platform/useRoom";
 import type { Player } from "../../../lib/platform/types";
 
+// IMPORTANT: use server-assigned colors so lobby and in-game colors match.
+// Keep a fallback palette for backward-compat (old snapshots without color).
+const PLAYER_COLORS = [
+  "#E6194B", // red
+  "#3CB44B", // green
+  "#4363D8", // blue
+  "#F58231", // orange
+  "#911EB4", // purple
+  "#46F0F0", // cyan
+  "#F032E6", // magenta
+  "#BCF60C", // lime
+  "#FABEBE", // pink
+  "#008080", // teal
+  "#FFD8B1", // peach
+  "#000000", // black
+];
+
+function colorForPlayer(p: Player | undefined) {
+  if (p?.color && typeof p.color === "string") return p.color;
+  const playerId = p?.playerId;
+  if (!playerId) return "#9ca3af";
+  let h = 0;
+  for (let i = 0; i < playerId.length; i++) h = (h * 31 + playerId.charCodeAt(i)) >>> 0;
+  return PLAYER_COLORS[h % PLAYER_COLORS.length];
+}
+
 export default function RoomPage() {
   const router = useRouter();
   const { code } = useParams() as any;
@@ -25,7 +51,10 @@ export default function RoomPage() {
   useEffect(() => {
     const gid = (snap as any)?.game?.id as string | undefined;
     const st = (snap as any)?.game?.status as string | undefined;
-    if (gid && st === "running") router.replace(`/room/${code}/game/${gid}`);
+    // Redirect to game page only when the game is actually running.
+    if (gid && st === "running") {
+      router.replace(`/room/${code}/game/${gid}`);
+    }
   }, [snap, router, code]);
 
   if (kicked) {
@@ -46,6 +75,7 @@ export default function RoomPage() {
   const me = players.find((p) => p.playerId === playerId);
   const gameId = (snap as any)?.game?.id as string | undefined;
   const gameStatus = (snap as any)?.game?.status as string | undefined;
+  const minPlayers = gameId === "dogtown" ? 1 : 4;
 
   const isReady = !!me?.ready;
   const canRename = !isReady;
@@ -153,8 +183,22 @@ export default function RoomPage() {
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 700 }}>
-                    {p.name} {p.isHost ? "👑" : ""}
+                  <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: colorForPlayer(p),
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        boxShadow: "0 0 0 1px rgba(0,0,0,0.4)",
+                        flex: "0 0 auto",
+                      }}
+                      title="Цвет игрока"
+                    />
+                    <span>
+                      {p.name} {p.isHost ? "👑" : ""}
+                    </span>
                   </div>
                   <div style={{ fontSize: 12, opacity: 0.7 }}>
                     {p.playerId.slice(0, 10)}… • {p.connected ? "online" : "offline"}
@@ -196,6 +240,24 @@ export default function RoomPage() {
                   Выбрать Ghost Letters
                 </button>
 
+                <button
+                  disabled={!me?.isHost}
+                  onClick={() => {
+                    socket.emit("room:setGame", { code: snap.code, byPlayerId: playerId, gameId: "dogtown" });
+                  }}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #444",
+                    background: me?.isHost ? "#9333ea" : "#2b2b3a",
+                    color: "#fff",
+                    cursor: me?.isHost ? "pointer" : "not-allowed",
+                    opacity: me?.isHost ? 1 : 0.6,
+                  }}
+                >
+                  Выбрать Dogtown
+                </button>
+
                 {!me?.isHost ? (
                   <span style={{ opacity: 0.7, fontSize: 13 }}>Только хост может выбрать игру</span>
                 ) : null}
@@ -205,12 +267,14 @@ export default function RoomPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ padding: 12, borderRadius: 12, border: "1px solid #333", opacity: 0.9 }}>
                 Выбрана игра: <b>{gameId}</b>
-                <div style={{ opacity: 0.75, marginTop: 6 }}>Для старта нужно 4+ игроков. Сейчас: {players.length}.</div>
+                <div style={{ opacity: 0.75, marginTop: 6 }}>
+                  Для старта нужно {minPlayers}+ игроков. Сейчас: {players.length}.
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <button
-                  disabled={!me?.isHost || players.length < 4}
+                  disabled={!me?.isHost || players.length < minPlayers}
                   onClick={() => {
                     socket.emit("room:startGame", { code: snap.code, byPlayerId: playerId });
                   }}
@@ -218,10 +282,10 @@ export default function RoomPage() {
                     padding: "10px 14px",
                     borderRadius: 12,
                     border: "1px solid #444",
-                    background: me?.isHost && players.length >= 4 ? "#16a34a" : "#2b2b3a",
+                    background: me?.isHost && players.length >= minPlayers ? "#16a34a" : "#2b2b3a",
                     color: "#fff",
-                    cursor: me?.isHost && players.length >= 4 ? "pointer" : "not-allowed",
-                    opacity: me?.isHost && players.length >= 4 ? 1 : 0.6,
+                    cursor: me?.isHost && players.length >= minPlayers ? "pointer" : "not-allowed",
+                    opacity: me?.isHost && players.length >= minPlayers ? 1 : 0.6,
                   }}
                 >
                   Старт
@@ -229,8 +293,8 @@ export default function RoomPage() {
 
                 {!me?.isHost ? (
                   <span style={{ opacity: 0.7, fontSize: 13 }}>Только хост может начать игру</span>
-                ) : players.length < 4 ? (
-                  <span style={{ opacity: 0.7, fontSize: 13 }}>Нужно 4+ игрока</span>
+                ) : players.length < minPlayers ? (
+                  <span style={{ opacity: 0.7, fontSize: 13 }}>Нужно {minPlayers}+ игрока</span>
                 ) : null}
               </div>
             </div>

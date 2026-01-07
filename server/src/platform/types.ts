@@ -7,6 +7,8 @@ export type Player = {
   playerId: string;
   socketId: string;
   name: string;
+  /** UI color assigned on first join; stable across reconnects */
+  color: string;
   isHost: boolean;
   ready: boolean;
   connected: boolean;
@@ -36,6 +38,7 @@ export type ClientPlayer = {
   playerId: string;
   socketId: string;
   name: string;
+  color: string;
   isHost: boolean;
   ready: boolean;
   connected: boolean;

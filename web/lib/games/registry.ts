@@ -6,4 +6,5 @@
  */
 export const gameRoomLoaders: Record<string, () => Promise<{ default: React.ComponentType<any> }>> = {
   "ghost-letters": () => import("./ghost-letters/Room"),
+  "dogtown": () => import("./dogtown/Room"),
 };

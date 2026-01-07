@@ -12,7 +12,7 @@ export default function BgPage() {
   const [name, setName] = useState(getSavedName("Nik"));
   const [busy, setBusy] = useState(false);
 
-  function createRoom() {
+  function createRoom(gameId: string) {
     console.log("[UI] createRoom()", { t: Date.now(), name });
     const clean = name.trim();
     if (!clean) return;
@@ -20,7 +20,7 @@ export default function BgPage() {
     saveName(clean);
     setBusy(true);
 
-    socket.emit("room:create", { name: clean, playerId: getPlayerId(), gameId: "ghost-letters" }, (res: any) => {
+    socket.emit("room:create", { name: clean, playerId: getPlayerId(), gameId }, (res: any) => {
       setBusy(false);
       if (res?.code) router.push(`/room/${res.code}`);
       else alert("Не удалось создать комнату");
@@ -48,12 +48,41 @@ export default function BgPage() {
         </p>
         <button
           disabled={busy || !name.trim()}
-          onClick={createRoom}
+          onClick={() => createRoom("ghost-letters")}
           style={{
             padding: "10px 14px",
             borderRadius: 12,
             border: "1px solid #444",
             background: busy ? "#222" : "#1d4ed8",
+            color: "#fff",
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {busy ? "Создаю..." : "Создать комнату"}
+        </button>
+      </div>
+
+      <div
+        style={{
+          border: "1px solid #2a2a3a",
+          background: "#10101a",
+          padding: 16,
+          borderRadius: 16,
+          marginTop: 14,
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Dogtown (Chinatown)</h2>
+        <p style={{ opacity: 0.8, marginTop: 0 }}>
+          Экономическая игра про районы и сделки. Пока что — просто доска.
+        </p>
+        <button
+          disabled={busy || !name.trim()}
+          onClick={() => createRoom("dogtown")}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 12,
+            border: "1px solid #444",
+            background: busy ? "#222" : "#9333ea",
             color: "#fff",
             cursor: busy ? "not-allowed" : "pointer",
           }}

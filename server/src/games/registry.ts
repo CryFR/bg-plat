@@ -1,9 +1,11 @@
 // server/src/games/registry.ts
 import type { GameAdapter } from "./types.js";
 import { ghostLettersAdapter } from "./ghost-letters/index.js";
+import { dogtownAdapter } from "./dogtown/index.js";
 
 const registry: Record<string, GameAdapter> = {
   [ghostLettersAdapter.id]: ghostLettersAdapter,
+  [dogtownAdapter.id]: dogtownAdapter,
 };
 
 export function getGameAdapter(id: string): GameAdapter | null {

@@ -26,6 +26,32 @@ import { allGameAdapters, getGameAdapter } from "../games/registry.js";
 // socket.id -> last create timestamp
 const lastCreateBySocket = new Map<string, number>();
 
+// Stable player colors (cycled if more players than palette).
+// IMPORTANT: keep them high-contrast and clearly distinguishable.
+// (Tableau/qualitative-like palette; avoids "5 shades of the same color".)
+const PLAYER_COLORS = [
+  "#E6194B", // red
+  "#3CB44B", // green
+  "#4363D8", // blue
+  "#F58231", // orange
+  "#911EB4", // purple
+  "#46F0F0", // cyan
+  "#F032E6", // magenta
+  "#BCF60C", // lime
+  "#FABEBE", // pink
+  "#008080", // teal
+  "#FFD8B1", // peach
+  "#000000", // black
+];
+
+function pickNextColor(room: { players: Array<{ color?: string }> }) {
+  const used = new Set(room.players.map((p) => p.color).filter(Boolean) as string[]);
+  const free = PLAYER_COLORS.find((c) => !used.has(c));
+  if (free) return free;
+  // fallback: cycle deterministically
+  return PLAYER_COLORS[room.players.length % PLAYER_COLORS.length];
+}
+
 function sendSecretTo(ctx: ServerContext, roomCode: string, playerId: string) {
   const room = getRoom(roomCode);
   if (!room?.game) return;
@@ -95,6 +121,8 @@ function registerRoomHandlers(ctx: ServerContext, socket: Socket) {
         // reconnect
         p.socketId = socket.id;
         p.name = name?.trim() || p.name;
+        // Backward-compat: ensure color exists for old rooms/players.
+        if (!p.color) p.color = pickNextColor(room);
         p.connected = true;
         p.lastSeen = now();
       } else {
@@ -102,6 +130,7 @@ function registerRoomHandlers(ctx: ServerContext, socket: Socket) {
           playerId,
           socketId: socket.id,
           name: name?.trim() || "Player",
+          color: pickNextColor(room),
           isHost: room.players.length === 0,
           ready: false,
           connected: true,
@@ -142,6 +171,7 @@ function registerRoomHandlers(ctx: ServerContext, socket: Socket) {
         playerId,
         socketId: socket.id,
         name: name?.trim() || "Host",
+        color: pickNextColor(room),
         isHost: true,
         ready: false,
         connected: true,
@@ -214,7 +244,8 @@ socket.on(
     }
 
     const playerIds = room.players.filter((p) => p.connected && !p.spectator).map((p) => p.playerId);
-    if (playerIds.length < 4) return cb?.({ ok: false, error: "NEED_4_PLAYERS" });
+    // Allow starting even solo (useful for development/testing).
+    if (playerIds.length < 1) return cb?.({ ok: false, error: "NEED_1_PLAYER" });
 
     try {
       room.game = { id: room.game.id, status: "running", state: adapter.init(playerIds) };

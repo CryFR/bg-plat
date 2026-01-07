@@ -2,6 +2,7 @@ export type Player = {
   playerId: string;
   socketId: string;
   name: string;
+  color?: string;
   isHost: boolean;
   ready: boolean;
   connected: boolean;

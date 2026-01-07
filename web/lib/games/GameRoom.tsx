@@ -7,9 +7,12 @@ import { gameRoomLoaders } from "./registry";
 type Props = {
   gameId: string;
   code: string;
+  // Optional injected room context (used by games that need lobby / players, etc.)
+  snap?: any;
+  socket?: any;
 };
 
-export function GameRoom({ gameId, code }: Props) {
+export function GameRoom({ gameId, code, snap, socket }: Props) {
   const Comp = useMemo(() => {
     const loader = gameRoomLoaders[gameId];
     if (!loader) return null;
@@ -31,5 +34,5 @@ export function GameRoom({ gameId, code }: Props) {
     );
   }
 
-  return <Comp code={code} />;
+  return <Comp code={code} snap={snap} socket={socket} />;
 }

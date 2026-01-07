@@ -32,6 +32,28 @@ export function buildDogtownPublicState(state: DogtownState) {
     tokensByPlayer,
     deedsKeepCounts,
 
+    // Trade offers are public so players can see & accept them.
+    tradeOffers: state.trade.offers.map((o) => ({
+      id: o.id,
+      from: o.from,
+      to: o.to ?? null,
+      giveMoney: o.giveMoney,
+      takeMoney: o.takeMoney,
+      giveTokenIds: [...o.giveTokenIds],
+      takeTokenIds: [...o.takeTokenIds],
+      createdAt: o.createdAt,
+    })),
+
+    tradeSessions: state.trade.sessions.map((s) => ({
+      id: s.id,
+      a: s.a,
+      b: s.b,
+      status: s.status,
+      createdAt: s.createdAt,
+      sideA: { money: s.sideA.money, tokenIds: [...s.sideA.tokenIds], committed: s.sideA.committed },
+      sideB: { money: s.sideB.money, tokenIds: [...s.sideB.tokenIds], committed: s.sideB.committed },
+    })),
+
     log: state.log.slice(-30),
   };
 }

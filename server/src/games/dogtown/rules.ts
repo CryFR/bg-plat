@@ -108,22 +108,33 @@ const MAX_ROUNDS = 6;
 const BOARD_CELLS = 85;
 
 // 12 building kinds; amount per kind = (size + 3)
+// That gives exactly 90 business tiles total:
+//  - size 3 => 6 copies (3 + 3)
+//  - size 4 => 7 copies (4 + 3)
+//  - size 5 => 8 copies (5 + 3)
+//  - size 6 => 9 copies (6 + 3)
+// With 3 kinds for each size: 3*(6+7+8+9)=90.
+// Animal-themed names are UI-only; here we store compact kind ids.
 const BUILDINGS: Array<{ kind: string; size: BuildingTypeSize }> = [
-  { kind: "icecream", size: 3 },
-  { kind: "wheezes", size: 3 },
-  { kind: "prophet", size: 3 },
+  // size 3 (6 copies each)
+  { kind: "dog_store", size: 3 },
+  { kind: "cat_store", size: 3 },
+  { kind: "vet_clinic", size: 3 },
 
-  { kind: "cauldron", size: 4 },
-  { kind: "robes", size: 4 },
-  { kind: "slugjigger", size: 4 },
+  // size 4 (7 copies each)
+  { kind: "grooming", size: 4 },
+  { kind: "aquarium", size: 4 },
+  { kind: "bird_shop", size: 4 },
 
-  { kind: "owl", size: 5 },
-  { kind: "books", size: 5 },
-  { kind: "bank", size: 5 },
+  // size 5 (8 copies each)
+  { kind: "pet_hotel", size: 5 },
+  { kind: "pet_food", size: 5 },
+  { kind: "toy_shop", size: 5 },
 
-  { kind: "menagerie", size: 6 },
-  { kind: "ollivander", size: 6 },
-  { kind: "quidditch", size: 6 },
+  // size 6 (9 copies each)
+  { kind: "shelter", size: 6 },
+  { kind: "exotic_pets", size: 6 },
+  { kind: "training", size: 6 },
 ];
 
 // ---------- Helpers ----------
@@ -211,6 +222,7 @@ export function initDogtown(playerIds: string[]): DogtownState {
     deedDeck,
     tokenBag,
     hands: { deeds, deedsKeep, tokens },
+    trade: { offers: [], sessions: [] },
     ready,
     log: [],
   };
@@ -290,14 +302,292 @@ function startTiles(state: DogtownState) {
 
   state.log.push(`Round ${state.round}: dealt tokens (${tokenCount} each)`);
   state.phase = "trade";
+  // reset trade offers for this round
+  state.trade.offers = [];
 }
 
 export function endTrade(state: DogtownState) {
   if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  // clear any outstanding offers
+  state.trade.offers = [];
   state.phase = "build";
   // Build is simultaneous: everyone can place on their own lots until they mark done.
   for (const pid of state.playerIds) state.buildDone[pid] = false;
   state.log.push(`Round ${state.round}: build phase start`);
+  return { ok: true } as const;
+}
+
+// ---------- Trade scaffolding ----------
+
+function genOfferId() {
+  return `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function genSessionId() {
+  return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function tradeCreateOffer(
+  state: DogtownState,
+  from: PlayerId,
+  payload: {
+    to?: PlayerId | null;
+    giveMoney?: number;
+    takeMoney?: number;
+    giveTokenIds?: string[];
+    takeTokenIds?: string[];
+  }
+) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  if (!state.playerIds.includes(from)) return { ok: false, error: "NO_PLAYER" } as const;
+
+  const giveMoney = Math.max(0, Number(payload.giveMoney ?? 0) || 0);
+  const takeMoney = Math.max(0, Number(payload.takeMoney ?? 0) || 0);
+  const giveTokenIds = Array.from(new Set((payload.giveTokenIds ?? []).map(String)));
+  const takeTokenIds = Array.from(new Set((payload.takeTokenIds ?? []).map(String)));
+
+  // basic sanity: offer must exchange something
+  if (giveMoney === 0 && takeMoney === 0 && giveTokenIds.length === 0 && takeTokenIds.length === 0) {
+    return { ok: false, error: "EMPTY_OFFER" } as const;
+  }
+
+  // Soft validation (no reservation): creator must currently own what they promise to give.
+  if ((state.money[from] ?? 0) < giveMoney) return { ok: false, error: "NO_MONEY" } as const;
+  const fromTokens = state.hands.tokens[from] || [];
+  for (const id of giveTokenIds) {
+    if (!fromTokens.some((t) => t.id === id)) return { ok: false, error: "NO_TOKEN" } as const;
+  }
+
+  const offer = {
+    id: genOfferId(),
+    from,
+    to: payload.to ?? null,
+    giveMoney,
+    takeMoney,
+    giveTokenIds,
+    takeTokenIds,
+    createdAt: Date.now(),
+  };
+  state.trade.offers.push(offer);
+  state.log.push(`Trade: ${from} offered (${giveTokenIds.length} tokens + ${giveMoney}) for (${takeTokenIds.length} tokens + ${takeMoney})`);
+  return { ok: true, offerId: offer.id } as const;
+}
+
+export function tradeCancelOffer(state: DogtownState, from: PlayerId, offerId: string) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  const before = state.trade.offers.length;
+  state.trade.offers = state.trade.offers.filter((o) => !(o.id === offerId && o.from === from));
+  if (state.trade.offers.length === before) return { ok: false, error: "NOT_FOUND" } as const;
+  state.log.push(`Trade: ${from} cancelled offer`);
+  return { ok: true } as const;
+}
+
+function removeTokenById(tokens: BuildingToken[], id: string) {
+  const idx = tokens.findIndex((t) => t.id === id);
+  if (idx < 0) return { ok: false as const, tokens };
+  const token = tokens[idx];
+  return { ok: true as const, token, tokens: [...tokens.slice(0, idx), ...tokens.slice(idx + 1)] };
+}
+
+export function tradeAcceptOffer(state: DogtownState, accepter: PlayerId, offerId: string) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  if (!state.playerIds.includes(accepter)) return { ok: false, error: "NO_PLAYER" } as const;
+  const offer = state.trade.offers.find((o) => o.id === offerId);
+  if (!offer) return { ok: false, error: "NOT_FOUND" } as const;
+  if (offer.from === accepter) return { ok: false, error: "SELF" } as const;
+  if (offer.to && offer.to !== accepter) return { ok: false, error: "NOT_FOR_YOU" } as const;
+
+  const from = offer.from;
+  const to = accepter;
+
+  // hard validation at accept time
+  if ((state.money[from] ?? 0) < offer.giveMoney) return { ok: false, error: "FROM_NO_MONEY" } as const;
+  if ((state.money[to] ?? 0) < offer.takeMoney) return { ok: false, error: "TO_NO_MONEY" } as const;
+
+  let fromTokens = state.hands.tokens[from] || [];
+  let toTokens = state.hands.tokens[to] || [];
+
+  const giveTokens: BuildingToken[] = [];
+  for (const id of offer.giveTokenIds) {
+    const r = removeTokenById(fromTokens, id);
+    if (!r.ok) return { ok: false, error: "FROM_NO_TOKEN" } as const;
+    fromTokens = r.tokens;
+    giveTokens.push(r.token);
+  }
+
+  const takeTokens: BuildingToken[] = [];
+  for (const id of offer.takeTokenIds) {
+    const r = removeTokenById(toTokens, id);
+    if (!r.ok) return { ok: false, error: "TO_NO_TOKEN" } as const;
+    toTokens = r.tokens;
+    takeTokens.push(r.token);
+  }
+
+  // money transfer
+  state.money[from] = (state.money[from] ?? 0) - offer.giveMoney + offer.takeMoney;
+  state.money[to] = (state.money[to] ?? 0) - offer.takeMoney + offer.giveMoney;
+
+  // token transfer
+  state.hands.tokens[from] = [...fromTokens, ...takeTokens];
+  state.hands.tokens[to] = [...toTokens, ...giveTokens];
+
+  // remove offers that involve transferred tokens (they changed ownership)
+  const movedIds = new Set([...offer.giveTokenIds, ...offer.takeTokenIds]);
+  state.trade.offers = state.trade.offers.filter((o) => {
+    if (o.id === offer.id) return false;
+    if (o.from !== from && o.from !== to) return true;
+    for (const id of o.giveTokenIds) if (movedIds.has(id)) return false;
+    for (const id of o.takeTokenIds) if (movedIds.has(id)) return false;
+    return true;
+  });
+
+  state.log.push(`Trade: ${from} <-> ${to} accepted`);
+  return { ok: true } as const;
+}
+
+// ---------- Trade sessions (request -> shared trade panel) ----------
+
+function findSession(state: DogtownState, sessionId: string) {
+  return state.trade.sessions.find((s) => s.id === sessionId);
+}
+
+function sessionSide(session: any, playerId: PlayerId) {
+  if (session.a === playerId) return { me: session.sideA, other: session.sideB, meKey: "A" as const };
+  if (session.b === playerId) return { me: session.sideB, other: session.sideA, meKey: "B" as const };
+  return null;
+}
+
+export function tradeRequest(state: DogtownState, from: PlayerId, to: PlayerId) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  if (!state.playerIds.includes(from) || !state.playerIds.includes(to)) return { ok: false, error: "NO_PLAYER" } as const;
+  if (from === to) return { ok: false, error: "SELF" } as const;
+
+  // prevent duplicates
+  const exists = state.trade.sessions.some(
+    (s) => (s.a === from && s.b === to) || (s.a === to && s.b === from)
+  );
+  if (exists) return { ok: false, error: "ALREADY_EXISTS" } as const;
+
+  const id = genSessionId();
+  state.trade.sessions.push({
+    id,
+    a: from,
+    b: to,
+    status: "pending",
+    createdAt: Date.now(),
+    sideA: { money: 0, tokenIds: [], committed: false },
+    sideB: { money: 0, tokenIds: [], committed: false },
+  });
+  state.log.push(`Trade: ${from} requested trade with ${to}`);
+  return { ok: true, sessionId: id } as const;
+}
+
+export function tradeRespond(state: DogtownState, playerId: PlayerId, sessionId: string, accept: boolean) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  const s = findSession(state, sessionId);
+  if (!s) return { ok: false, error: "NOT_FOUND" } as const;
+  if (s.b !== playerId) return { ok: false, error: "NOT_FOR_YOU" } as const;
+  if (s.status !== "pending") return { ok: false, error: "BAD_STATE" } as const;
+
+  if (!accept) {
+    state.trade.sessions = state.trade.sessions.filter((x) => x.id !== sessionId);
+    state.log.push(`Trade: ${playerId} declined trade`);
+    return { ok: true, declined: true } as const;
+  }
+
+  s.status = "open";
+  state.log.push(`Trade: session ${sessionId} opened`);
+  return { ok: true } as const;
+}
+
+export function tradeUpdateSession(state: DogtownState, playerId: PlayerId, sessionId: string, payload: { money?: number; tokenIds?: string[] }) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  const s = findSession(state, sessionId);
+  if (!s) return { ok: false, error: "NOT_FOUND" } as const;
+  if (s.status !== "open") return { ok: false, error: "BAD_STATE" } as const;
+
+  const side = sessionSide(s, playerId);
+  if (!side) return { ok: false, error: "NOT_IN_SESSION" } as const;
+
+  const money = Math.max(0, Math.floor(Number(payload.money ?? side.me.money) || 0));
+  const tokenIds = Array.from(new Set((payload.tokenIds ?? side.me.tokenIds).map(String)));
+
+  // validate ownership (no reservation): player must currently have these tokens & money
+  if ((state.money[playerId] ?? 0) < money) return { ok: false, error: "NO_MONEY" } as const;
+  const myTokens = state.hands.tokens[playerId] || [];
+  for (const id of tokenIds) {
+    if (!myTokens.some((t) => t.id === id)) return { ok: false, error: "NO_TOKEN" } as const;
+  }
+
+  side.me.money = money;
+  side.me.tokenIds = tokenIds;
+  // editing invalidates commit
+  side.me.committed = false;
+  state.log.push(`Trade: ${playerId} updated session ${sessionId}`);
+  return { ok: true } as const;
+}
+
+export function tradeCommitSession(state: DogtownState, playerId: PlayerId, sessionId: string, committed: boolean) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  const s = findSession(state, sessionId);
+  if (!s) return { ok: false, error: "NOT_FOUND" } as const;
+  if (s.status !== "open") return { ok: false, error: "BAD_STATE" } as const;
+  const side = sessionSide(s, playerId);
+  if (!side) return { ok: false, error: "NOT_IN_SESSION" } as const;
+
+  side.me.committed = !!committed;
+
+  // if both committed -> execute swap
+  if (s.sideA.committed && s.sideB.committed) {
+    const a = s.a;
+    const b = s.b;
+
+    // hard validate holdings at execution time
+    if ((state.money[a] ?? 0) < s.sideA.money) return { ok: false, error: "A_NO_MONEY" } as const;
+    if ((state.money[b] ?? 0) < s.sideB.money) return { ok: false, error: "B_NO_MONEY" } as const;
+
+    let aTokens = state.hands.tokens[a] || [];
+    let bTokens = state.hands.tokens[b] || [];
+
+    const giveA: BuildingToken[] = [];
+    for (const id of s.sideA.tokenIds) {
+      const r = removeTokenById(aTokens, id);
+      if (!r.ok) return { ok: false, error: "A_NO_TOKEN" } as const;
+      aTokens = r.tokens;
+      giveA.push(r.token);
+    }
+
+    const giveB: BuildingToken[] = [];
+    for (const id of s.sideB.tokenIds) {
+      const r = removeTokenById(bTokens, id);
+      if (!r.ok) return { ok: false, error: "B_NO_TOKEN" } as const;
+      bTokens = r.tokens;
+      giveB.push(r.token);
+    }
+
+    // transfer money
+    state.money[a] = (state.money[a] ?? 0) - s.sideA.money + s.sideB.money;
+    state.money[b] = (state.money[b] ?? 0) - s.sideB.money + s.sideA.money;
+
+    // transfer tokens
+    state.hands.tokens[a] = [...aTokens, ...giveB];
+    state.hands.tokens[b] = [...bTokens, ...giveA];
+
+    state.trade.sessions = state.trade.sessions.filter((x) => x.id !== sessionId);
+    state.log.push(`Trade: session ${sessionId} executed`);
+    return { ok: true, executed: true } as const;
+  }
+
+  return { ok: true } as const;
+}
+
+export function tradeCancelSession(state: DogtownState, playerId: PlayerId, sessionId: string) {
+  if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
+  const s = findSession(state, sessionId);
+  if (!s) return { ok: false, error: "NOT_FOUND" } as const;
+  if (s.a !== playerId && s.b !== playerId) return { ok: false, error: "NOT_IN_SESSION" } as const;
+  state.trade.sessions = state.trade.sessions.filter((x) => x.id !== sessionId);
+  state.log.push(`Trade: session ${sessionId} cancelled`);
   return { ok: true } as const;
 }
 

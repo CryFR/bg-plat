@@ -6,7 +6,20 @@ import { getRoom } from "../../platform/roomStore.js";
 import { buildSnapshot } from "../../platform/snapshot.js";
 
 import type { DogtownState } from "./state.js";
-import { submitDeedsKeep, endTrade, buildPlace, buildDone } from "./rules.js";
+import {
+  submitDeedsKeep,
+  endTrade,
+  buildPlace,
+  buildDone,
+  tradeCreateOffer,
+  tradeCancelOffer,
+  tradeAcceptOffer,
+  tradeRequest,
+  tradeRespond,
+  tradeUpdateSession,
+  tradeCommitSession,
+  tradeCancelSession,
+} from "./rules.js";
 import { buildDogtownSecretState } from "./views.js";
 
 function sendSecretTo(ctx: ServerContext, code: string, playerId: string) {
@@ -60,6 +73,171 @@ export function registerDogtownSocketHandlers(ctx: ServerContext, socket: Socket
     }
   );
 
+  // ---- Trade scaffolding (offers) ----
+
+  socket.on(
+    "dogtown:tradeOffer",
+    (
+      {
+        code,
+        playerId,
+        to,
+        giveMoney,
+        takeMoney,
+        giveTokenIds,
+        takeTokenIds,
+      }: {
+        code: string;
+        playerId: string;
+        to?: string | null;
+        giveMoney?: number;
+        takeMoney?: number;
+        giveTokenIds?: string[];
+        takeTokenIds?: string[];
+      },
+      cb?: (res: any) => void
+    ) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeCreateOffer(room.game.state as DogtownState, playerId, {
+        to: to ?? null,
+        giveMoney,
+        takeMoney,
+        giveTokenIds,
+        takeTokenIds,
+      });
+
+      if (!(res as any).ok) return cb?.(res);
+
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeCancel",
+    ({ code, playerId, offerId }: { code: string; playerId: string; offerId: string }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeCancelOffer(room.game.state as DogtownState, playerId, String(offerId));
+      if (!(res as any).ok) return cb?.(res);
+
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeAccept",
+    ({ code, playerId, offerId }: { code: string; playerId: string; offerId: string }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeAcceptOffer(room.game.state as DogtownState, playerId, String(offerId));
+      if (!(res as any).ok) return cb?.(res);
+
+      // money changes are secret => re-send secrets
+      for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
+
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  // ---- Trade sessions (request -> shared trade panel) ----
+
+  socket.on(
+    "dogtown:tradeRequest",
+    ({ code, playerId, to }: { code: string; playerId: string; to: string }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeRequest(room.game.state as DogtownState, playerId, String(to));
+      if (!(res as any).ok) return cb?.(res);
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeRespond",
+    ({ code, playerId, sessionId, accept }: { code: string; playerId: string; sessionId: string; accept: boolean }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeRespond(room.game.state as DogtownState, playerId, String(sessionId), !!accept);
+      if (!(res as any).ok) return cb?.(res);
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeUpdate",
+    (
+      { code, playerId, sessionId, money, tokenIds }: { code: string; playerId: string; sessionId: string; money?: number; tokenIds?: string[] },
+      cb?: (res: any) => void
+    ) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeUpdateSession(room.game.state as DogtownState, playerId, String(sessionId), { money, tokenIds });
+      if (!(res as any).ok) return cb?.(res);
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeCommit",
+    ({ code, playerId, sessionId, committed }: { code: string; playerId: string; sessionId: string; committed: boolean }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeCommitSession(room.game.state as DogtownState, playerId, String(sessionId), !!committed);
+      if (!(res as any).ok) return cb?.(res);
+
+      // execution may change money => refresh secrets
+      if ((res as any).executed) {
+        for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
+      }
+
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
+  socket.on(
+    "dogtown:tradeCancelSession",
+    ({ code, playerId, sessionId }: { code: string; playerId: string; sessionId: string }, cb?: (res: any) => void) => {
+      const room = getRoom(code);
+      if (!room?.game) return cb?.({ ok: false, error: "NO_GAME" });
+      if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
+      if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
+
+      const res = tradeCancelSession(room.game.state as DogtownState, playerId, String(sessionId));
+      if (!(res as any).ok) return cb?.(res);
+      io.to(code).emit("room:update", buildSnapshot(code));
+      cb?.(res);
+    }
+  );
+
   socket.on(
     "dogtown:buildPlace",
     (
@@ -71,11 +249,12 @@ export function registerDogtownSocketHandlers(ctx: ServerContext, socket: Socket
       if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
       if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
 
-      buildPlace(room.game.state as DogtownState, playerId, Number(cell), String(tokenId));
-      for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
+      const res = buildPlace(room.game.state as DogtownState, playerId, Number(cell), String(tokenId));
+      if (!(res as any).ok) return cb?.(res);
 
+      for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
       io.to(code).emit("room:update", buildSnapshot(code));
-      cb?.({ ok: true });
+      cb?.(res);
     }
   );
 
@@ -87,11 +266,12 @@ export function registerDogtownSocketHandlers(ctx: ServerContext, socket: Socket
       if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
       if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
 
-      buildDone(room.game.state as DogtownState, playerId);
-      for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
+      const res = buildDone(room.game.state as DogtownState, playerId);
+      if (!(res as any).ok) return cb?.(res);
 
+      for (const p of room.players) sendSecretTo(ctx, code, p.playerId);
       io.to(code).emit("room:update", buildSnapshot(code));
-      cb?.({ ok: true });
+      cb?.(res);
     }
   );
 }

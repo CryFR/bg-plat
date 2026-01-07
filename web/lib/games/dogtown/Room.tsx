@@ -11,6 +11,89 @@ type Props = {
   socket?: any;
 };
 
+type DogtownPublic = {
+  phase?: "deeds" | "tiles" | "trade" | "build" | "income" | "end";
+  round?: number;
+  firstPlayerId?: string | null;
+  buildDone?: Record<string, boolean>;
+  owners?: Record<string | number, string>;
+  placed?: Record<string | number, { id: string; kind: string; size: number } | null>;
+  tokenCounts?: Record<string, number>;
+  tokensByPlayer?: Record<string, Array<{ id: string; kind: string; size: number }>>;
+  deedsKeepCounts?: Record<string, number>;
+  log?: string[];
+};
+
+type DogtownSecret = {
+  money?: number;
+  deeds?: number[];
+  deedsKeep?: number[];
+  tokens?: Array<{ id: string; kind: string; size: number }>;
+};
+
+const DEAL_KEEP: Record<3 | 4 | 5, Array<[deal: number, keep: number]>> = {
+  3: [
+    [7, 5],
+    [6, 4],
+    [6, 4],
+    [6, 4],
+    [6, 4],
+    [6, 4],
+  ],
+  4: [
+    [6, 4],
+    [5, 3],
+    [5, 3],
+    [5, 3],
+    [5, 3],
+    [5, 3],
+  ],
+  5: [
+    [5, 3],
+    [5, 3],
+    [5, 3],
+    [4, 2],
+    [4, 2],
+    [4, 2],
+  ],
+};
+
+function clampPlayersCount(n: number): 3 | 4 | 5 {
+  if (n <= 3) return 3;
+  if (n === 4) return 4;
+  return 5;
+}
+
+function keepCountFor(round: number, playerCount: number): number {
+  const pc = clampPlayersCount(playerCount);
+  const idx = Math.max(0, Math.min(5, (round || 1) - 1));
+  return DEAL_KEEP[pc][idx][1];
+}
+
+function phaseLabel(phase?: DogtownPublic["phase"]) {
+  switch (phase) {
+    case "deeds":
+      return "Участки";
+    case "tiles":
+      return "Жетоны";
+    case "trade":
+      return "Торговля";
+    case "build":
+      return "Стройка";
+    case "income":
+      return "Доход";
+    case "end":
+      return "Финал";
+    default:
+      return "…";
+  }
+}
+
+function moneyFmt(x?: number) {
+  const v = typeof x === "number" ? x : 0;
+  return v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
 type Cell = { n: number; x: number; y: number };
 
 function withOffset(cells: Cell[], ox: number, oy: number): Cell[] {
@@ -160,13 +243,21 @@ function DogtownBoard({
   socket,
   players,
   isRunning,
+  phase,
+  myTurn,
+  selectedTokenId,
   owners,
+  placed,
 }: {
   code: string;
   socket?: any;
   players: Player[];
   isRunning: boolean;
+  phase?: DogtownPublic["phase"];
+  myTurn: boolean;
+  selectedTokenId: string | null;
   owners: Record<string | number, string> | undefined;
+  placed?: DogtownPublic["placed"];
 }) {
   const [selected, setSelected] = React.useState<number | null>(null);
   const b = React.useMemo(() => bounds(CELLS), []);
@@ -237,16 +328,21 @@ function DogtownBoard({
               const ownerFill = owner ? hexToRgba(colorForPlayer(owner), 0.55) : null;
 
               const fill = isSel ? "#ffffff" : ownerFill ?? "#e9e9e9";
+              const building = placed ? (placed[c.n] ?? placed[String(c.n)]) : null;
               return (
                 <g
                   key={c.n}
                   onClick={() => {
                     setSelected((p) => (p === c.n ? null : c.n));
-                    if (isRunning && socket) {
-                      socket.emit("dogtown:claimCell", {
+                    if (!isRunning || !socket) return;
+
+                    // Build: click places selected token on your owned empty cell.
+                    if (phase === "build" && myTurn && selectedTokenId) {
+                      socket.emit("dogtown:buildPlace", {
                         code,
                         playerId: getPlayerId(),
                         cell: c.n,
+                        tokenId: selectedTokenId,
                       });
                     }
                   }}
@@ -273,6 +369,20 @@ function DogtownBoard({
                   >
                     {c.n}
                   </text>
+
+                  {building ? (
+                    <text
+                      x={x + S - 10}
+                      y={y + 14}
+                      textAnchor="end"
+                      dominantBaseline="middle"
+                      fontSize={12}
+                      fontWeight={900}
+                      fill="#000"
+                    >
+                      {String(building.size)}
+                    </text>
+                  ) : null}
                 </g>
               );
             })}
@@ -285,11 +395,67 @@ function DogtownBoard({
 
 export default function DogtownRoom({ code, snap, socket }: Props) {
   const st = (snap as any)?.game?.status as string | undefined;
-  const owners = (snap as any)?.game?.state?.owners as Record<string | number, string> | undefined;
+
+  // Prefer publicState (what server intends clients to use). Fallback to state for older snapshots/debug.
+  const gp = (snap as any)?.game?.publicState as DogtownPublic | undefined;
+  const gs = (snap as any)?.game?.state as DogtownPublic | undefined;
+  const view = gp ?? gs;
+
+  const owners = (view?.owners ?? gs?.owners) as Record<string | number, string> | undefined;
+  const placed = view?.placed ?? gs?.placed;
+  const phase = view?.phase;
+  const round = view?.round ?? 1;
+  const activePlayerIds = Object.keys(view?.tokenCounts || {});
+  const buildDone = view?.buildDone ?? {};
+
   const players = ((snap as any)?.players || []) as Player[];
   const me = players.find((p) => p.playerId === getPlayerId());
   const isHost = !!me?.isHost;
+  const isSpectator = !!(me as any)?.spectator;
   const isRunning = st === "running";
+
+  const [secret, setSecret] = React.useState<DogtownSecret>({});
+  const [keepSel, setKeepSel] = React.useState<number[]>([]);
+  const [selectedTokenId, setSelectedTokenId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!socket) return;
+    const onSecret = (m: any) => {
+      setSecret({
+        money: typeof m?.money === "number" ? m.money : undefined,
+        deeds: Array.isArray(m?.deeds) ? m.deeds : undefined,
+        deedsKeep: Array.isArray(m?.deedsKeep) ? m.deedsKeep : undefined,
+        tokens: Array.isArray(m?.tokens) ? m.tokens : undefined,
+      });
+    };
+    socket.on("me:secret", onSecret);
+    return () => {
+      socket.off("me:secret", onSecret);
+    };
+  }, [socket]);
+
+  // Reset local selections when phase changes
+  React.useEffect(() => {
+    if (phase === "deeds") {
+      setKeepSel([]);
+    }
+    if (phase !== "build") {
+      setSelectedTokenId(null);
+    }
+  }, [phase, round]);
+
+  const myId = getPlayerId();
+  const myBuildDone = !!buildDone[myId];
+  // Back-compat variable name used throughout this file.
+  const myTurn = !!isRunning && !isSpectator && phase === "build" && !myBuildDone;
+  const keepNeed = keepCountFor(round, Math.max(3, Math.min(5, activePlayerIds.length || players.length || 4)));
+  const didSubmitKeep = (gs?.deedsKeepCounts?.[myId] ?? 0) === keepNeed;
+  const myTokens = secret.tokens || [];
+
+  function fmtMoney(n?: number) {
+    if (typeof n !== "number") return "—";
+    return n.toLocaleString("ru-RU");
+  }
 
   if (!snap) {
     return <div style={{ padding: 24, opacity: 0.8 }}>Захожу в Dogtown…</div>;
@@ -309,49 +475,58 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
             </div>
           </div>
 
-          {!isRunning ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button
-                onClick={() => (window.location.href = `/room/${code}`)}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(255,255,255,0.14)",
-                  background: "rgba(255,255,255,0.06)",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Назад в комнату
-              </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              onClick={() => (window.location.href = `/room/${code}`)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(255,255,255,0.06)",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Назад в комнату
+            </button>
 
+            {isHost ? (
               <button
                 disabled={!canStart}
                 onClick={() => {
+                  if (isRunning) {
+                    const ok = window.confirm("Рестартнуть игру? Текущий прогресс будет потерян.");
+                    if (!ok) return;
+                  }
                   socket?.emit?.("room:startGame", { code, byPlayerId: getPlayerId() });
                 }}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 12,
                   border: "1px solid rgba(255,255,255,0.14)",
-                  background: canStart ? "#16a34a" : "rgba(255,255,255,0.06)",
+                  background: canStart ? (isRunning ? "#ef4444" : "#16a34a") : "rgba(255,255,255,0.06)",
                   color: "#fff",
                   cursor: canStart ? "pointer" : "not-allowed",
                   opacity: canStart ? 1 : 0.6,
+                  fontWeight: 900,
                 }}
               >
-                Start
+                {isRunning ? "Restart" : "Start"}
               </button>
+            ) : null}
 
+            {!isHost ? (
               <div style={{ fontSize: 13, opacity: 0.75 }}>
-                {isHost ? (
-                  players.length < minPlayers ? `Нужно ${minPlayers}+ игроков` : ""
-                ) : (
-                  "Start доступен только хосту"
-                )}
+                {isRunning ? "Игра уже запущена (Start/Restart только у хоста)" : "Start доступен только хосту"}
               </div>
-            </div>
-          ) : null}
+
+            ) : (
+              <div style={{ fontSize: 13, opacity: 0.75 }}>
+                {players.length < minPlayers ? `Нужно ${minPlayers}+ игроков` : ""}
+              </div>
+            )}
+          </div>
+
         </div>
 
         <div style={{ marginBottom: 12 }}>
@@ -401,12 +576,349 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
               <div style={{ marginBottom: 10, opacity: 0.75 }}>
                 Lobby Dogtown: тут будут правила/подсказки/настройки. Пока — превью карты.
               </div>
-              <DogtownBoard code={code} socket={socket} players={players} isRunning={false} owners={owners} />
+              <DogtownBoard
+                code={code}
+                socket={socket}
+                players={players}
+                isRunning={false}
+                phase={phase}
+                myTurn={false}
+                selectedTokenId={null}
+                owners={owners}
+                placed={placed}
+              />
             </div>
           </div>
         ) : (
           // running
-          <DogtownBoard code={code} socket={socket} players={players} isRunning={true} owners={owners} />
+          <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 16, alignItems: "start" }}>
+            <div
+              style={{
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.10)",
+                background: "rgba(255,255,255,0.04)",
+                padding: 16,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontWeight: 900, fontSize: 16 }}>
+                  Раунд {round}/6 • {phaseLabel(phase)}
+                </div>
+                <div style={{ fontSize: 13, opacity: 0.8 }}>
+                  {phase === "build" ? (
+                    (() => {
+                      const total = players.filter((p) => !p.spectator).length || Object.keys(buildDone).length;
+                      const done = Object.values(buildDone).filter(Boolean).length;
+                      return (
+                        <span>
+                          Стройка: <b>{done}/{total}</b> готовы{myBuildDone ? " (вы готовы)" : ""}
+                        </span>
+                      );
+                    })()
+                  ) : null}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+                <div
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    background: "rgba(0,0,0,0.25)",
+                    fontWeight: 800,
+                    fontSize: 13,
+                  }}
+                >
+                  Ваши деньги: {fmtMoney(secret.money)}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  (деньги скрыты от других)
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(0,0,0,0.20)",
+                }}
+              >
+                <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 8 }}>Жетоны игроков (для торговли)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {players
+                    .filter((p) => !p.spectator)
+                    .map((p) => {
+                      const toks = view?.tokensByPlayer?.[p.playerId] ?? [];
+                      return (
+                        <div key={p.playerId} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                          <div style={{ minWidth: 110, fontSize: 13, fontWeight: 800, opacity: 0.95 }}>{p.name}</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {toks.length === 0 ? (
+                              <span style={{ fontSize: 12, opacity: 0.65 }}>—</span>
+                            ) : (
+                              toks.map((t) => (
+                                <span
+                                  key={t.id}
+                                  style={{
+                                    fontSize: 12,
+                                    padding: "2px 8px",
+                                    borderRadius: 999,
+                                    border: "1px solid rgba(255,255,255,0.10)",
+                                    background: "rgba(255,255,255,0.06)",
+                                    opacity: 0.95,
+                                    display: "inline-flex",
+                                    gap: 6,
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <span style={{ opacity: 0.9 }}>{t.kind}</span>
+                                  <span style={{ opacity: 0.8 }}>• {t.size}</span>
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {isSpectator ? (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    background: "rgba(0,0,0,0.25)",
+                    fontSize: 13,
+                    opacity: 0.9,
+                    lineHeight: 1.35,
+                  }}
+                >
+                  <b>Вы зритель.</b> Вы зашли после старта игры, поэтому карты/деньги/жетоны вам не раздаются.
+                  <div style={{ marginTop: 6, opacity: 0.8 }}>
+                    Решение: хост нажимает <b>Restart</b> или вы заходите до старта.
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Phase panels */}
+              {phase === "deeds" ? (
+                <div>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Выберите участки (оставить {keepNeed})</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                    {(secret.deeds || []).map((n) => {
+                      const on = keepSel.includes(n);
+                      return (
+                        <button
+                          key={n}
+                          disabled={isSpectator || didSubmitKeep}
+                          onClick={() => {
+                            if (isSpectator || didSubmitKeep) return;
+                            setKeepSel((prev) => {
+                              if (prev.includes(n)) return prev.filter((x) => x !== n);
+                              return [...prev, n];
+                            });
+                          }}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            border: "1px solid rgba(255,255,255,0.14)",
+                            background: on ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)",
+                            color: "#fff",
+                            cursor: isSpectator || didSubmitKeep ? "not-allowed" : "pointer",
+                            opacity: isSpectator || didSubmitKeep ? 0.6 : 1,
+                            fontWeight: 900,
+                          }}
+                        >
+                          {n}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <button
+                      disabled={isSpectator || didSubmitKeep || keepSel.length !== keepNeed}
+                      onClick={() => {
+                        socket?.emit?.("dogtown:deedsKeep", { code, playerId: myId, keep: keepSel });
+                      }}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: "1px solid rgba(255,255,255,0.14)",
+                        background: !didSubmitKeep && keepSel.length === keepNeed ? "#2563eb" : "rgba(255,255,255,0.06)",
+                        color: "#fff",
+                        cursor: !didSubmitKeep && keepSel.length === keepNeed ? "pointer" : "not-allowed",
+                        opacity: !didSubmitKeep && keepSel.length === keepNeed ? 1 : 0.6,
+                        fontWeight: 900,
+                      }}
+                    >
+                      Подтвердить ({keepSel.length}/{keepNeed})
+                    </button>
+                    {didSubmitKeep ? <div style={{ fontSize: 13, opacity: 0.8 }}>Ждём остальных…</div> : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {phase === "trade" ? (
+                <div>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Торговля</div>
+                  <div style={{ fontSize: 13, opacity: 0.8, marginBottom: 10 }}>
+                    Договаривайтесь как угодно (голос/чат). Система сделок будет позже — сейчас просто переход фазы.
+                  </div>
+                  <button
+                    disabled={!isHost}
+                    onClick={() => socket?.emit?.("dogtown:endTrade", { code })}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.14)",
+                      background: isHost ? "#16a34a" : "rgba(255,255,255,0.06)",
+                      color: "#fff",
+                      cursor: isHost ? "pointer" : "not-allowed",
+                      opacity: isHost ? 1 : 0.6,
+                      fontWeight: 900,
+                    }}
+                  >
+                    Закончить торговлю
+                  </button>
+                  {!isHost ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Фазу завершает хост.</div> : null}
+                </div>
+              ) : null}
+
+              {phase === "build" ? (
+                <div>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Строительство</div>
+                  <div style={{ fontSize: 13, opacity: 0.8, marginBottom: 10 }}>
+                    Выберите жетон, затем кликните по своей пустой клетке на поле.
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                    {myTokens.length === 0 ? (
+                      <div style={{ fontSize: 13, opacity: 0.75 }}>Жетонов нет.</div>
+                    ) : (
+                      myTokens.map((t) => {
+                        const on = selectedTokenId === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            disabled={isSpectator}
+                            onClick={() => {
+                              if (isSpectator) return;
+                              setSelectedTokenId((p) => (p === t.id ? null : t.id));
+                            }}
+                            style={{
+                              padding: "10px 12px",
+                              borderRadius: 12,
+                              border: "1px solid rgba(255,255,255,0.14)",
+                              background: on ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)",
+                              color: "#fff",
+                              cursor: isSpectator ? "not-allowed" : "pointer",
+                              opacity: isSpectator ? 0.6 : 1,
+                              fontWeight: 900,
+                              display: "inline-flex",
+                              gap: 8,
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ opacity: 0.9 }}>{t.kind}</span>
+                            <span
+                              style={{
+                                padding: "2px 8px",
+                                borderRadius: 999,
+                                background: "rgba(0,0,0,0.25)",
+                                border: "1px solid rgba(255,255,255,0.10)",
+                                fontSize: 12,
+                              }}
+                            >
+                              {t.size}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <button
+                      disabled={isSpectator || myBuildDone}
+                      onClick={() => socket?.emit?.("dogtown:buildDone", { code, playerId: myId })}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: "1px solid rgba(255,255,255,0.14)",
+                        background: !myBuildDone ? "#2563eb" : "rgba(255,255,255,0.06)",
+                        color: "#fff",
+                        cursor: !myBuildDone ? "pointer" : "not-allowed",
+                        opacity: !myBuildDone ? 1 : 0.6,
+                        fontWeight: 900,
+                      }}
+                    >
+                      Закончить строительство
+                    </button>
+                    {myBuildDone ? <div style={{ fontSize: 13, opacity: 0.75 }}>Вы уже отметились как готовый.</div> : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {phase === "tiles" || phase === "income" ? (
+                <div style={{ fontSize: 13, opacity: 0.8 }}>
+                  {phase === "tiles" ? "Раздаём жетоны…" : "Считаем доход…"}
+                </div>
+              ) : null}
+
+              {phase === "end" ? (
+                <div>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Игра окончена</div>
+                  <div style={{ fontSize: 13, opacity: 0.8 }}>
+                    Ваш результат: <b>{fmtMoney(secret.money)}</b>
+                  </div>
+                </div>
+              ) : null}
+
+              {Array.isArray(view?.log) && view!.log!.length ? (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85, marginBottom: 6 }}>Лог</div>
+                  <div
+                    style={{
+                      maxHeight: 160,
+                      overflow: "auto",
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      background: "rgba(0,0,0,0.25)",
+                      padding: 10,
+                      fontSize: 12,
+                      opacity: 0.85,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {view!.log!.slice().reverse().map((l, i) => (
+                      <div key={i} style={{ marginBottom: 4 }}>{l}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <DogtownBoard
+                code={code}
+                socket={socket}
+                players={players}
+                isRunning={true}
+                phase={phase}
+                myTurn={myTurn}
+                selectedTokenId={selectedTokenId}
+                owners={owners}
+                placed={placed}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -2,14 +2,45 @@
 import type { DogtownState } from "./state.js";
 
 export function buildDogtownPublicState(state: DogtownState) {
-  // Пока отдаем минимум — этого достаточно, чтобы фронт понимал, что игра есть.
+  const tokensByPlayer: Record<string, Array<{ id: string; kind: string; size: number }>> = {};
+  const tokenCounts: Record<string, number> = {};
+  for (const pid of state.playerIds) {
+    const toks = state.hands.tokens[pid] || [];
+    tokenCounts[pid] = toks.length;
+    // Tokens are PUBLIC in Dogtown so players can negotiate trades.
+    tokensByPlayer[pid] = toks.map((t) => ({ id: t.id, kind: t.kind, size: t.size }));
+  }
+
+  const deedsKeepCounts: Record<string, number> = {};
+  for (const pid of state.playerIds) deedsKeepCounts[pid] = (state.hands.deedsKeep[pid] || []).length;
+
   return {
     phase: state.phase,
-    players: state.playerIds,
+    round: state.round,
+    firstPlayerId: state.playerIds[state.firstPlayerIdx],
+    buildDone: state.buildDone,
+
+    owners: state.owners,
+    placed: Object.fromEntries(
+      Object.entries(state.placed).map(([k, v]) => [
+        k,
+        v ? { id: v.id, kind: v.kind, size: v.size } : null,
+      ])
+    ),
+
+    tokenCounts,
+    tokensByPlayer,
+    deedsKeepCounts,
+
+    log: state.log.slice(-30),
   };
 }
 
-export function buildDogtownSecretState(_state: DogtownState, _playerId: string) {
-  // Секретов пока нет.
-  return {};
+export function buildDogtownSecretState(state: DogtownState, playerId: string) {
+  return {
+    money: state.money[playerId] ?? 0,
+    deeds: state.hands.deeds[playerId] || [],
+    deedsKeep: state.hands.deedsKeep[playerId] || [],
+    tokens: (state.hands.tokens[playerId] || []).map((t) => ({ id: t.id, kind: t.kind, size: t.size })),
+  };
 }

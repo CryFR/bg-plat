@@ -1156,6 +1156,21 @@ function TopBar({
 
           return null;
         })()}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            onClick={() => (window.location.href = `/bg`)}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(255,255,255,0.06)",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Назад
+          </button>
+        </div>
 
         {showRestart && isHost && (
           <button onClick={onRestart} style={btnStyle(false)}>

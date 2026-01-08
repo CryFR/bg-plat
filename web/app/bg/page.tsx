@@ -44,7 +44,7 @@ export default function BgPage() {
       <div style={{ border: "1px solid #2a2a3a", background: "#10101a", padding: 16, borderRadius: 16 }}>
         <h2 style={{ marginTop: 0 }}>Письма призрака</h2>
         <p style={{ opacity: 0.8, marginTop: 0 }}>
-          Соревновательный режим: Призрак + Убийца. Требуется 4+ игроков.
+          Соревновательный режим: Призрак + Убийца. 4-12 игроков.
         </p>
         <button
           disabled={busy || !name.trim()}
@@ -73,7 +73,7 @@ export default function BgPage() {
       >
         <h2 style={{ marginTop: 0 }}>Dogtown (Chinatown)</h2>
         <p style={{ opacity: 0.8, marginTop: 0 }}>
-          Экономическая игра про районы и сделки. Пока что — просто доска.
+          Экономическая игра про районы и сделки. 3-5 игроков.
         </p>
         <button
           disabled={busy || !name.trim()}

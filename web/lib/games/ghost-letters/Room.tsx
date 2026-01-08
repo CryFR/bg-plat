@@ -138,7 +138,7 @@ export default function GhostLettersRoom({ code }: { code: string }) {
     socket.on("ghost:mailbox", onMailbox);
     socket.on("room:kicked", onKicked);
     socket.on("room:error", (p: any) => {
-      console.warn("[room:error]", p);
+      // avoid noisy console in production
     });
 
     socket.emit("room:join", { code, name: getSavedName("Nik"), playerId: getPlayerId() }, (res: any) => {

@@ -13,7 +13,7 @@ export default function BgPage() {
   const [busy, setBusy] = useState(false);
 
   function createRoom(gameId: string) {
-    console.log("[UI] createRoom()", { t: Date.now(), name });
+    // (no noisy logs in production)
     const clean = name.trim();
     if (!clean) return;
 

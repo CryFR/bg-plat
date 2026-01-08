@@ -21,6 +21,7 @@ type DogtownPublic = {
   tokenCounts?: Record<string, number>;
   tokensByPlayer?: Record<string, Array<{ id: string; kind: string; size: number }>>;
   deedsKeepCounts?: Record<string, number>;
+  finalScores?: Array<{ playerId: string; money: number }>;
   log?: string[];
 };
 
@@ -533,7 +534,7 @@ function DogtownBoard({
                         (res: any) => {
                           if (res && res.ok) return;
                           // eslint-disable-next-line no-console
-                          console.warn("buildPlace failed", res);
+                          // (no noisy console in production)
                         }
                       );
                     }
@@ -1228,7 +1229,7 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                                   >
                                     <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}><b>Вы предлагаете</b></div>
 
-
+                                    
                                     <div style={{ marginBottom: 10 }}>
                                       <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>Деньги:</div>
 
@@ -1429,23 +1430,23 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                                             );
                                           })
                                           .map((id: string) => {
-                                            const t = otherTokens.find((x) => x.id === id);
-                                            return (
-                                              <span
-                                                key={id}
-                                                style={{
-                                                  fontSize: 12,
-                                                  padding: "4px 8px",
-                                                  borderRadius: 999,
-                                                  border: "1px solid rgba(255,255,255,0.10)",
-                                                  background: "rgba(255,255,255,0.06)",
-                                                  opacity: 0.95,
-                                                }}
-                                              >
-                                                {t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : id.slice(0, 6)}
-                                              </span>
-                                            );
-                                          })
+                                          const t = otherTokens.find((x) => x.id === id);
+                                          return (
+                                            <span
+                                              key={id}
+                                              style={{
+                                                fontSize: 12,
+                                                padding: "4px 8px",
+                                                borderRadius: 999,
+                                                border: "1px solid rgba(255,255,255,0.10)",
+                                                background: "rgba(255,255,255,0.06)",
+                                                opacity: 0.95,
+                                              }}
+                                            >
+                                              {t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : id.slice(0, 6)}
+                                            </span>
+                                          );
+                                        })
                                       ) : (
                                         <span style={{ fontSize: 12, opacity: 0.65 }}>—</span>
                                       )}
@@ -1698,6 +1699,64 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                   <div style={{ fontSize: 13, opacity: 0.8 }}>
                     Ваш результат: <b>{fmtMoney(secret.money)}</b>
                   </div>
+
+                  {Array.isArray(view?.finalScores) && view!.finalScores!.length ? (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85, marginBottom: 6 }}>
+                        Итоговая таблица
+                      </div>
+                      {(() => {
+                        const rows = view!.finalScores!
+                          .map((r) => {
+                            const p = players.find((x) => x.playerId === r.playerId);
+                            return {
+                              playerId: r.playerId,
+                              name: p?.name || r.playerId.slice(0, 6),
+                              isMe: r.playerId === myId,
+                              color: p ? colorForPlayer(p) : "#999",
+                              money: r.money,
+                            };
+                          })
+                          .sort((a, b) => b.money - a.money);
+
+                        return (
+                          <div
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid rgba(255,255,255,0.10)",
+                              background: "rgba(0,0,0,0.25)",
+                              overflow: "hidden",
+                            }}
+                          >
+                            {rows.map((r, idx) => (
+                              <div
+                                key={r.playerId}
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  padding: "8px 10px",
+                                  borderTop: idx === 0 ? "none" : "1px solid rgba(255,255,255,0.08)",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                                  <div style={{ width: 22, textAlign: "right", fontWeight: 900, opacity: 0.9 }}>
+                                    {idx + 1}.
+                                  </div>
+                                  <span style={{ width: 10, height: 10, borderRadius: 999, background: r.color, boxShadow: "0 0 0 2px rgba(0,0,0,0.35)" }} />
+                                  <div style={{ fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                    {r.name}{r.isMe ? " (вы)" : ""}
+                                  </div>
+                                </div>
+                                <div style={{ fontWeight: 900 }}>{fmtMoney(r.money)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1814,6 +1873,54 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                     );
                   })}
               </div>
+
+              {/* Income memo */}
+              <div
+                style={{
+                  marginTop: 14,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(0,0,0,0.22)",
+                  padding: 10,
+                }}
+              >
+                <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 8 }}>Памятка: доход с кластера</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={memoTh}>Кластер</th>
+                        <th style={memoTh}>1</th>
+                        <th style={memoTh}>2</th>
+                        <th style={memoTh}>3</th>
+                        <th style={memoTh}>4</th>
+                        <th style={memoTh}>5</th>
+                        <th style={memoTh}>6</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style={memoTdLeft}>Неполный</td>
+                        <td style={memoTd}>10к</td>
+                        <td style={memoTd}>20к</td>
+                        <td style={memoTd}>40к</td>
+                        <td style={memoTd}>60к</td>
+                        <td style={memoTd}>80к</td>
+                        <td style={memoTd}>—</td>
+                      </tr>
+                      <tr>
+                        <td style={memoTdLeft}>Полный</td>
+                        <td style={memoTd}>—</td>
+                        <td style={memoTd}>—</td>
+                        <td style={memoTd}>50к</td>
+                        <td style={memoTd}>80к</td>
+                        <td style={memoTd}>110к</td>
+                        <td style={memoTd}>140к</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1821,3 +1928,27 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
     </div>
   );
 }
+
+const memoTh: React.CSSProperties = {
+  textAlign: "center",
+  padding: "6px 8px",
+  borderTop: "1px solid rgba(255,255,255,0.10)",
+  borderBottom: "1px solid rgba(255,255,255,0.10)",
+  borderRight: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.06)",
+  fontWeight: 900,
+};
+
+const memoTd: React.CSSProperties = {
+  textAlign: "center",
+  padding: "6px 8px",
+  borderBottom: "1px solid rgba(255,255,255,0.10)",
+  borderRight: "1px solid rgba(255,255,255,0.10)",
+};
+
+const memoTdLeft: React.CSSProperties = {
+  ...memoTd,
+  textAlign: "left",
+  fontWeight: 900,
+  background: "rgba(255,255,255,0.03)",
+};

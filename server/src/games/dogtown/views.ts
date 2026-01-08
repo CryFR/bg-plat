@@ -54,6 +54,12 @@ export function buildDogtownPublicState(state: DogtownState) {
       sideB: { money: s.sideB.money, tokenIds: [...s.sideB.tokenIds], cellIds: [...(s.sideB.cellIds || [])], committed: s.sideB.committed },
     })),
 
+    // Reveal final money only when game is finished.
+    finalScores:
+      state.phase === "end"
+        ? state.playerIds.map((pid) => ({ playerId: pid, money: state.money[pid] ?? 0 }))
+        : undefined,
+
     log: state.log.slice(-30),
   };
 }

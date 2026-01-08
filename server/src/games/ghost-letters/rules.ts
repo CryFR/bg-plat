@@ -12,10 +12,10 @@ function shuffle<T>(arr: T[]) {
 // Rounds per official table (final voting does NOT count as a round).
 export function roundsForPlayers(n: number) {
   // n >= 4 in our platform
-  if (n <= 4) return 5; // 4 -> 5
-  if (n <= 7) return 4; // 5-7 -> 4
-  if (n <= 10) return 3; // 8-10 -> 3
-  return 2; // 11-12 -> 2
+  if (n <= 4) return 6; // 4 -> 5
+  if (n <= 7) return 5; // 5-7 -> 4
+  if (n <= 10) return 4; // 8-10 -> 3
+  return 3; // 11-12 -> 2
 }
 
 // --- One finite deck for EVERYTHING (setup + hands) ---

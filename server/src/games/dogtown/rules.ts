@@ -91,16 +91,17 @@ const INCOME_PARTIAL: Record<number, number> = {
   0: 0,
   1: 10_000,
   2: 20_000,
-  3: 30_000,
-  4: 40_000,
-  5: 50_000,
+  3: 40_000,
+  4: 60_000,
+  5: 80_000,
+  // 6 is not used: size 6 clusters are full at 6
 };
 
 const INCOME_FULL: Record<BuildingTypeSize, number> = {
-  3: 40_000,
-  4: 70_000,
+  3: 50_000,
+  4: 80_000,
   5: 110_000,
-  6: 160_000,
+  6: 140_000,
 };
 
 const START_MONEY = 50_000;
@@ -475,8 +476,8 @@ export function tradeRequest(state: DogtownState, from: PlayerId, to: PlayerId) 
     b: to,
     status: "pending",
     createdAt: Date.now(),
-    sideA: { money: 0, tokenIds: [], committed: false },
-    sideB: { money: 0, tokenIds: [], committed: false },
+    sideA: { money: 0, tokenIds: [], cellIds: [], committed: false },
+    sideB: { money: 0, tokenIds: [], cellIds: [], committed: false },
   });
   state.log.push(`Trade: ${from} requested trade with ${to}`);
   return { ok: true, sessionId: id } as const;
@@ -500,7 +501,12 @@ export function tradeRespond(state: DogtownState, playerId: PlayerId, sessionId:
   return { ok: true } as const;
 }
 
-export function tradeUpdateSession(state: DogtownState, playerId: PlayerId, sessionId: string, payload: { money?: number; tokenIds?: string[] }) {
+export function tradeUpdateSession(
+  state: DogtownState,
+  playerId: PlayerId,
+  sessionId: string,
+  payload: { money?: number; tokenIds?: string[]; cellIds?: number[] }
+) {
   if (state.phase !== "trade") return { ok: false, error: "WRONG_PHASE" } as const;
   const s = findSession(state, sessionId);
   if (!s) return { ok: false, error: "NOT_FOUND" } as const;
@@ -511,6 +517,13 @@ export function tradeUpdateSession(state: DogtownState, playerId: PlayerId, sess
 
   const money = Math.max(0, Math.floor(Number(payload.money ?? side.me.money) || 0));
   const tokenIds = Array.from(new Set((payload.tokenIds ?? side.me.tokenIds).map(String)));
+const cellIds: number[] = Array.from(
+  new Set(
+    (payload.cellIds ?? side.me.cellIds)
+      .map((n: unknown) => Number(n))
+      .filter((n: number): n is number => Number.isFinite(n))
+  )
+);
 
   // validate ownership (no reservation): player must currently have these tokens & money
   if ((state.money[playerId] ?? 0) < money) return { ok: false, error: "NO_MONEY" } as const;
@@ -519,8 +532,14 @@ export function tradeUpdateSession(state: DogtownState, playerId: PlayerId, sess
     if (!myTokens.some((t) => t.id === id)) return { ok: false, error: "NO_TOKEN" } as const;
   }
 
+  // validate cell ownership (cells may already have a business on them)
+  for (const c of cellIds) {
+    if ((state.owners[c] ?? null) !== playerId) return { ok: false, error: "NO_CELL" } as const;
+  }
+
   side.me.money = money;
   side.me.tokenIds = tokenIds;
+  side.me.cellIds = cellIds;
   // editing invalidates commit
   side.me.committed = false;
   state.log.push(`Trade: ${playerId} updated session ${sessionId}`);
@@ -572,6 +591,23 @@ export function tradeCommitSession(state: DogtownState, playerId: PlayerId, sess
     // transfer tokens
     state.hands.tokens[a] = [...aTokens, ...giveB];
     state.hands.tokens[b] = [...bTokens, ...giveA];
+
+    // transfer cells (ownership); businesses already placed on those cells stay on the board and
+    // will now belong to the new owner because income uses owners[] + placed[].
+    const aCells = Array.from(new Set((s.sideA.cellIds || []).map((n) => Number(n))));
+    const bCells = Array.from(new Set((s.sideB.cellIds || []).map((n) => Number(n))));
+    const overlap = aCells.some((c) => bCells.includes(c));
+    if (overlap) return { ok: false, error: "CELL_OVERLAP" } as const;
+
+    for (const c of aCells) {
+      if ((state.owners[c] ?? null) !== a) return { ok: false, error: "A_NO_CELL" } as const;
+    }
+    for (const c of bCells) {
+      if ((state.owners[c] ?? null) !== b) return { ok: false, error: "B_NO_CELL" } as const;
+    }
+
+    for (const c of aCells) state.owners[c] = b;
+    for (const c of bCells) state.owners[c] = a;
 
     state.trade.sessions = state.trade.sessions.filter((x) => x.id !== sessionId);
     state.log.push(`Trade: session ${sessionId} executed`);
@@ -637,16 +673,36 @@ function advanceRoundOrEnd(state: DogtownState) {
 }
 
 function applyIncome(state: DogtownState) {
-  const visited = new Set<number>();
-  const cells = Array.from({ length: BOARD_CELLS }, (_, i) => i + 1);
+  // Robust cluster detection:
+  // - A cluster = orthogonally adjacent (no diagonals) business tiles
+  // - Same owner AND same business kind
+  // - If connected region size exceeds tile size T, it is split into full clusters of size T plus the remainder
+  //
+  // We use the same board geometry as the client (CELL_BY_ID x/y), but build neighbors by (x,y) lookup
+  // instead of scanning all cells, to avoid any mismatch and to be O(N).
 
-  function neighborsOf(c: number): number[] {
+  const xyToId = new Map<string, number>();
+  for (const c of CELL_LIST) xyToId.set(`${c.x},${c.y}`, c.n);
+
+  function neighbors(id: number): number[] {
+    const c = CELL_BY_ID.get(id);
+    if (!c) return [];
     const out: number[] = [];
-    for (const n of cells) {
-      if (areAdjacent(c, n)) out.push(n);
+    const cand: Array<[number, number]> = [
+      [c.x + 1, c.y],
+      [c.x - 1, c.y],
+      [c.x, c.y + 1],
+      [c.x, c.y - 1],
+    ];
+    for (const [x, y] of cand) {
+      const nid = xyToId.get(`${x},${y}`);
+      if (nid) out.push(nid);
     }
     return out;
   }
+
+  const visited = new Set<number>();
+  const cells = Array.from({ length: BOARD_CELLS }, (_, i) => i + 1);
 
   for (const c of cells) {
     if (visited.has(c)) continue;
@@ -654,26 +710,31 @@ function applyIncome(state: DogtownState) {
     const token = state.placed[c];
     const owner = state.owners[c];
 
+    // Only start BFS from an actual business tile with an owner
     if (!token || !owner) {
       visited.add(c);
       continue;
     }
 
-    const q = [c];
+    const kind = token.kind;
+    const q: number[] = [c];
     visited.add(c);
-    const component: number[] = [];
 
+    const component: number[] = [];
     while (q.length) {
       const cur = q.pop()!;
       component.push(cur);
 
-      for (const n of neighborsOf(cur)) {
+      for (const n of neighbors(cur)) {
         if (visited.has(n)) continue;
         const t2 = state.placed[n];
         const o2 = state.owners[n];
-        if (!t2 || !o2) continue;
+        if (!t2 || !o2) {
+          visited.add(n);
+          continue;
+        }
         if (o2 !== owner) continue;
-        if (t2.kind !== token.kind) continue;
+        if (t2.kind !== kind) continue;
 
         visited.add(n);
         q.push(n);

@@ -50,8 +50,8 @@ export function buildDogtownPublicState(state: DogtownState) {
       b: s.b,
       status: s.status,
       createdAt: s.createdAt,
-      sideA: { money: s.sideA.money, tokenIds: [...s.sideA.tokenIds], committed: s.sideA.committed },
-      sideB: { money: s.sideB.money, tokenIds: [...s.sideB.tokenIds], committed: s.sideB.committed },
+      sideA: { money: s.sideA.money, tokenIds: [...s.sideA.tokenIds], cellIds: [...(s.sideA.cellIds || [])], committed: s.sideA.committed },
+      sideB: { money: s.sideB.money, tokenIds: [...s.sideB.tokenIds], cellIds: [...(s.sideB.cellIds || [])], committed: s.sideB.committed },
     })),
 
     log: state.log.slice(-30),

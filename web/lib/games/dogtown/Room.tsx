@@ -133,8 +133,8 @@ const A: Cell[] = [
   { n: 1, x: 0, y: 0 }, { n: 2, x: 1, y: 0 },
   { n: 3, x: 0, y: 1 }, { n: 4, x: 1, y: 1 }, { n: 5, x: 2, y: 1 },
   { n: 6, x: -1, y: 2 }, { n: 7, x: 0, y: 2 }, { n: 8, x: 1, y: 2 }, { n: 9, x: 2, y: 2 },
-  { n: 10, x: 0, y: 3 }, { n: 11, x: 1, y: 3 }, { n: 12, x: 2, y: 3 },
-  { n: 13, x: 0, y: 4 }, { n: 14, x: 1, y: 4 }, { n: 15, x: 2, y: 4 },
+  { n: 10, x: -1, y: 3 }, { n: 11, x: 0, y: 3 }, { n: 12, x: 1, y: 3 },
+  { n: 13, x: -1, y: 4 }, { n: 14, x: 0, y: 4 }, { n: 15, x: 1, y: 4 },
 ];
 
 const B: Cell[] = [
@@ -299,6 +299,15 @@ function DogtownBoard({
   // Pan (right mouse button drag)
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
   const rmbRef = React.useRef<null | { active: boolean; sx: number; sy: number; bx: number; by: number }>(null);
+  // Refs to read latest values inside wheel handler (cursor-relative zoom updates both zoom + pan).
+  const panRef = React.useRef(pan);
+  const zoomRef = React.useRef(zoom);
+  React.useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+  React.useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
   const b = React.useMemo(() => bounds(CELLS), []);
 
   // Cell size in "native" board coordinates. Actual on-screen size is controlled by auto-fit scale.
@@ -417,16 +426,46 @@ function DogtownBoard({
           // Local zoom only for the map (do not scale the whole UI)
           e.preventDefault();
           e.stopPropagation();
-          const dy = e.deltaY;
-          setZoom((z) => {
-            const next = z - dy * 0.001;
-            return Math.min(3, Math.max(1, next));
-          });
+          // Zoom towards cursor (like maps/figma): keep the world point under cursor stable.
+          const MIN_ZOOM = 0.6;
+          const MAX_ZOOM = 2.6;
+          const ZOOM_SPEED = 0.0015;
+
+          const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+
+          const curZoom = zoomRef.current;
+          const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, curZoom * Math.exp(-e.deltaY * ZOOM_SPEED)));
+          if (Math.abs(nextZoom - curZoom) < 1e-6) return;
+
+          // Current and next transforms
+          const curZScale = fit.scale * curZoom;
+          const nextZScale = fit.scale * nextZoom;
+          const curTx = (fit.boxW - nativeW * curZScale) / 2;
+          const curTy = (fit.boxH - nativeH * curZScale) / 2;
+          const nextTx = (fit.boxW - nativeW * nextZScale) / 2;
+          const nextTy = (fit.boxH - nativeH * nextZScale) / 2;
+
+          const curPan = panRef.current;
+
+          // World coordinates under cursor
+          const wx = (cx - (curTx + curPan.x)) / curZScale;
+          const wy = (cy - (curTy + curPan.y)) / curZScale;
+
+          // New pan so that (wx,wy) stays under cursor
+          const nextPan = {
+            x: cx - nextTx - wx * nextZScale,
+            y: cy - nextTy - wy * nextZScale,
+          };
+
+          setPan(nextPan);
+          setZoom(nextZoom);
         }}
       >
         <div style={{ position: "absolute", right: 10, bottom: 10, zIndex: 5, display: "flex", gap: 8 }}>
           <button
-            onClick={() => setZoom((z) => Math.min(1.9, Number((z + 0.1).toFixed(2))))}
+            onClick={() => setZoom((z) => Math.min(2.6, Number((z + 0.1).toFixed(2))))}
             style={{
               padding: "8px 10px",
               borderRadius: 12,
@@ -636,6 +675,7 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
   const [tradeSessionId, setTradeSessionId] = React.useState<string | null>(null);
   const [tradeMyMoney, setTradeMyMoney] = React.useState<number>(0);
   const [tradeMyTokenIds, setTradeMyTokenIds] = React.useState<string[]>([]);
+  const [tradeMyCellIds, setTradeMyCellIds] = React.useState<number[]>([]);
 
   const myId = getPlayerId();
   const keepNeed = keepCountFor(round, Math.max(3, Math.min(5, activePlayerIds.length || players.length || 4)));
@@ -670,6 +710,7 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
       setTradeSessionId(null);
       setTradeMyMoney(0);
       setTradeMyTokenIds([]);
+      setTradeMyCellIds([]);
     }
   }, [phase, round, deedsSig]);
 
@@ -692,12 +733,14 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
         const mySide = mine.a === myId ? mine.sideA : mine.sideB;
         setTradeMyMoney(Number(mySide?.money ?? 0) || 0);
         setTradeMyTokenIds(Array.isArray(mySide?.tokenIds) ? mySide.tokenIds : []);
+        setTradeMyCellIds(Array.isArray(mySide?.cellIds) ? mySide.cellIds.map((n: any) => Number(n)).filter((n: any) => Number.isFinite(n)) : []);
       }
     } else {
       if (tradeSessionId) {
         setTradeSessionId(null);
         setTradeMyMoney(0);
         setTradeMyTokenIds([]);
+        setTradeMyCellIds([]);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -720,7 +763,15 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
     return true;
   }
 
-  function pushTradeUpdate(nextMoney: number, nextTokenIds: string[]) {
+  function sameCellIds(a: number[] = [], b: number[] = []) {
+    if (a.length !== b.length) return false;
+    const sa = [...a].map(Number).sort((x, y) => x - y);
+    const sb = [...b].map(Number).sort((x, y) => x - y);
+    for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+    return true;
+  }
+
+  function pushTradeUpdate(nextMoney: number, nextTokenIds: string[], nextCellIds: number[]) {
     if (!socket) return;
     if (isSpectator) return;
 
@@ -733,17 +784,26 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
 
     const curMoney = Number(mySide?.money ?? 0) || 0;
     const curIds: string[] = Array.isArray(mySide?.tokenIds) ? mySide.tokenIds : [];
+    const curCells: number[] = Array.isArray(mySide?.cellIds) ? mySide.cellIds.map((n: any) => Number(n)).filter((n: any) => Number.isFinite(n)) : [];
 
     const moneyChanged = nextMoney !== curMoney;
     const tokensChanged = !sameTokenIds(nextTokenIds, curIds);
+    const cellsChanged = !sameCellIds(nextCellIds, curCells);
 
     // If I was "ready" and I actually changed the offer, automatically снять готовность.
-    if ((moneyChanged || tokensChanged) && mySide?.committed) {
+    if ((moneyChanged || tokensChanged || cellsChanged) && mySide?.committed) {
       socket.emit?.("dogtown:tradeCommit", { code, playerId: myId, sessionId: mine.id, committed: false });
     }
 
-    if (moneyChanged || tokensChanged) {
-      socket.emit?.("dogtown:tradeUpdate", { code, playerId: myId, sessionId: mine.id, money: nextMoney, tokenIds: nextTokenIds });
+    if (moneyChanged || tokensChanged || cellsChanged) {
+      socket.emit?.("dogtown:tradeUpdate", {
+        code,
+        playerId: myId,
+        sessionId: mine.id,
+        money: nextMoney,
+        tokenIds: nextTokenIds,
+        cellIds: nextCellIds,
+      });
     }
   }
 
@@ -754,13 +814,20 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
     const next = Math.max(0, Math.floor((tradeMyMoney || 0) + delta));
     const clamped = typeof max === "number" ? Math.min(max, next) : next;
     setTradeMyMoney(clamped);
-    pushTradeUpdate(clamped, tradeMyTokenIds);
+    pushTradeUpdate(clamped, tradeMyTokenIds, tradeMyCellIds);
   }
 
   function tradeToggleToken(id: string) {
     const next = tradeMyTokenIds.includes(id) ? tradeMyTokenIds.filter((x) => x !== id) : [...tradeMyTokenIds, id];
     setTradeMyTokenIds(next);
-    pushTradeUpdate(tradeMyMoney || 0, next);
+    pushTradeUpdate(tradeMyMoney || 0, next, tradeMyCellIds);
+  }
+
+  function tradeToggleCell(cell: number) {
+    const c = Number(cell);
+    const next = tradeMyCellIds.includes(c) ? tradeMyCellIds.filter((x) => x !== c) : [...tradeMyCellIds, c];
+    setTradeMyCellIds(next);
+    pushTradeUpdate(tradeMyMoney || 0, tradeMyTokenIds, next);
   }
 
 
@@ -772,6 +839,14 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
   // This also fixes the case when a non-host re-enters the room and their `me:secret` wasn't re-sent yet.
   const myTokensRaw = (view?.tokensByPlayer?.[myId] ?? secret.tokens ?? []) as Array<{ id: string; kind: string; size: number }>;
   const myTokens = sortTokens(myTokensRaw);
+
+  const myOwnedCells = React.useMemo(() => {
+    const out: number[] = [];
+    for (let c = 1; c <= 85; c++) {
+      if ((owners as any)?.[c] === myId) out.push(c);
+    }
+    return out;
+  }, [owners, myId]);
 
   function fmtMoney(n?: number) {
     if (typeof n !== "number") return "—";
@@ -1153,7 +1228,7 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                                   >
                                     <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}><b>Вы предлагаете</b></div>
 
-                                    
+
                                     <div style={{ marginBottom: 10 }}>
                                       <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>Деньги:</div>
 
@@ -1251,6 +1326,46 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                                       )}
                                     </div>
 
+                                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 10, marginBottom: 6 }}>Клетки:</div>
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                      {myOwnedCells.length ? (
+                                        myOwnedCells.map((c) => {
+                                          const on = tradeMyCellIds.includes(c);
+                                          const t: any = (placed as any)?.[c] || null;
+                                          const label = t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : "пусто";
+                                          return (
+                                            <button
+                                              key={c}
+                                              disabled={isSpectator}
+                                              onClick={() => {
+                                                if (isSpectator) return;
+                                                tradeToggleCell(c);
+                                              }}
+                                              style={{
+                                                fontSize: 12,
+                                                padding: "4px 8px",
+                                                borderRadius: 999,
+                                                border: "1px solid rgba(255,255,255,0.10)",
+                                                background: on ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)",
+                                                color: "#fff",
+                                                cursor: isSpectator ? "not-allowed" : "pointer",
+                                                opacity: isSpectator ? 0.6 : 1,
+                                                display: "inline-flex",
+                                                gap: 6,
+                                                alignItems: "center",
+                                              }}
+                                              title={label}
+                                            >
+                                              #{c}
+                                              {t ? <span style={{ opacity: 0.85 }}>• {tokenEmoji(t.kind)} {t.size}</span> : <span style={{ opacity: 0.7 }}>• —</span>}
+                                            </button>
+                                          );
+                                        })
+                                      ) : (
+                                        <span style={{ fontSize: 12, opacity: 0.65 }}>—</span>
+                                      )}
+                                    </div>
+
                                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
                                       <button
                                         disabled={isSpectator}
@@ -1314,23 +1429,56 @@ export default function DogtownRoom({ code, snap, socket }: Props) {
                                             );
                                           })
                                           .map((id: string) => {
-                                          const t = otherTokens.find((x) => x.id === id);
-                                          return (
-                                            <span
-                                              key={id}
-                                              style={{
-                                                fontSize: 12,
-                                                padding: "4px 8px",
-                                                borderRadius: 999,
-                                                border: "1px solid rgba(255,255,255,0.10)",
-                                                background: "rgba(255,255,255,0.06)",
-                                                opacity: 0.95,
-                                              }}
-                                            >
-                                              {t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : id.slice(0, 6)}
-                                            </span>
-                                          );
-                                        })
+                                            const t = otherTokens.find((x) => x.id === id);
+                                            return (
+                                              <span
+                                                key={id}
+                                                style={{
+                                                  fontSize: 12,
+                                                  padding: "4px 8px",
+                                                  borderRadius: 999,
+                                                  border: "1px solid rgba(255,255,255,0.10)",
+                                                  background: "rgba(255,255,255,0.06)",
+                                                  opacity: 0.95,
+                                                }}
+                                              >
+                                                {t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : id.slice(0, 6)}
+                                              </span>
+                                            );
+                                          })
+                                      ) : (
+                                        <span style={{ fontSize: 12, opacity: 0.65 }}>—</span>
+                                      )}
+                                    </div>
+
+                                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 10, marginBottom: 6 }}>Клетки:</div>
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                      {(otherSide?.cellIds || []).length ? (
+                                        (otherSide.cellIds as number[])
+                                          .slice()
+                                          .map((n: any) => Number(n))
+                                          .filter((n: any) => Number.isFinite(n))
+                                          .sort((a: number, b: number) => a - b)
+                                          .map((c: number) => {
+                                            const t: any = (placed as any)?.[c] || null;
+                                            const label = t ? `${tokenEmoji(t.kind)} ${tokenLabel(t.kind)} • ${t.size}` : "пусто";
+                                            return (
+                                              <span
+                                                key={c}
+                                                title={label}
+                                                style={{
+                                                  fontSize: 12,
+                                                  padding: "4px 8px",
+                                                  borderRadius: 999,
+                                                  border: "1px solid rgba(255,255,255,0.10)",
+                                                  background: "rgba(255,255,255,0.06)",
+                                                  opacity: 0.95,
+                                                }}
+                                              >
+                                                #{c}{t ? ` • ${tokenEmoji(t.kind)} ${t.size}` : ""}
+                                              </span>
+                                            );
+                                          })
                                       ) : (
                                         <span style={{ fontSize: 12, opacity: 0.65 }}>—</span>
                                       )}

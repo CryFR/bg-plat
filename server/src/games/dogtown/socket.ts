@@ -187,7 +187,14 @@ export function registerDogtownSocketHandlers(ctx: ServerContext, socket: Socket
   socket.on(
     "dogtown:tradeUpdate",
     (
-      { code, playerId, sessionId, money, tokenIds }: { code: string; playerId: string; sessionId: string; money?: number; tokenIds?: string[] },
+      {
+        code,
+        playerId,
+        sessionId,
+        money,
+        tokenIds,
+        cellIds,
+      }: { code: string; playerId: string; sessionId: string; money?: number; tokenIds?: string[]; cellIds?: number[] },
       cb?: (res: any) => void
     ) => {
       const room = getRoom(code);
@@ -195,7 +202,7 @@ export function registerDogtownSocketHandlers(ctx: ServerContext, socket: Socket
       if (room.game.id !== "dogtown") return cb?.({ ok: false, error: "WRONG_GAME" });
       if (room.game.status !== "running" || room.game.state == null) return cb?.({ ok: false, error: "NOT_RUNNING" });
 
-      const res = tradeUpdateSession(room.game.state as DogtownState, playerId, String(sessionId), { money, tokenIds });
+      const res = tradeUpdateSession(room.game.state as DogtownState, playerId, String(sessionId), { money, tokenIds, cellIds });
       if (!(res as any).ok) return cb?.(res);
       io.to(code).emit("room:update", buildSnapshot(code));
       cb?.(res);

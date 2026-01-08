@@ -35,6 +35,8 @@ export type TradeOffer = {
 export type TradeSide = {
   money: number;
   tokenIds: string[];
+  /** owned cells to swap (may already contain a built business) */
+  cellIds: CellId[];
   committed: boolean;
 };
 
